@@ -11,6 +11,7 @@
 #include "menu.h"
 #include "bindings.h"
 #include "controller_info.h"
+#include "input_record.h"
 #ifndef DISABLE_NUKLEAR
 #include "nuklear_ui/blastem_nuklear.h"
 #endif
@@ -228,7 +229,7 @@ void handle_binding_down(keybinding * binding)
 	}
 	if (binding->bind_type == BIND_GAMEPAD && current_system && current_system->gamepad_down)
 	{
-		current_system->gamepad_down(current_system, binding->subtype_a, binding->subtype_b);
+		input_record_gamepad(1, binding->subtype_a, binding->subtype_b);
 	}
 	else if (binding->bind_type == BIND_MOUSE && current_system && current_system->mouse_down)
 	{
@@ -324,7 +325,7 @@ void handle_binding_up(keybinding * binding)
 	{
 	case BIND_GAMEPAD:
 		if (allow_content_binds && current_system->gamepad_up) {
-			current_system->gamepad_up(current_system, binding->subtype_a, binding->subtype_b);
+			input_record_gamepad(0, binding->subtype_a, binding->subtype_b);
 		}
 		break;
 	case BIND_MOUSE:
@@ -418,7 +419,7 @@ void handle_binding_up(keybinding * binding)
 			break;
 		case UI_SMS_PAUSE:
 			if (allow_content_binds && current_system->gamepad_down) {
-				current_system->gamepad_down(current_system, GAMEPAD_MAIN_UNIT, MAIN_UNIT_PAUSE);
+				input_record_gamepad(1, GAMEPAD_MAIN_UNIT, MAIN_UNIT_PAUSE);
 			}
 			break;
 		case UI_SCREENSHOT:

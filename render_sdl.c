@@ -15,6 +15,7 @@
 #include "util.h"
 #include "paths.h"
 #include "ppm.h"
+#include "input_record.h"
 #include "png.h"
 #include "config.h"
 #include "controller_info.h"
@@ -2465,6 +2466,9 @@ int frame_queue_len, frame_queue_read, frame_queue_write;
 
 void render_framebuffer_updated(uint8_t which, int width)
 {
+	if (which <= FRAMEBUFFER_EVEN) {
+		input_record_frame_end();
+	}
 	if (which < FRAMEBUFFER_USER_START && (sync_src == SYNC_AUDIO_THREAD || sync_src == SYNC_EXTERNAL)) {
 		SDL_LockMutex(frame_mutex);
 			while (frame_queue_len == 4) {
