@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+#Builds blastem.js and blastem.wasm with emscripten. Extra arguments go to make,
+#e.g. ./build_web DEBUG=1 for a build with DWARF debug info.
+#EMSDK defaults to an emsdk checkout next to this repo. On Windows, run this from
+#an MSYS2 shell with make installed: emsdk_env.sh doesn't work there, as the
+#login shell drops the Windows environment emsdk.py needs, so emscripten's
+#tools are put on PATH directly instead.
+set -e
+cd "$(dirname "$0")"
+EMSDK=${EMSDK:-$(cd .. && pwd)/emsdk}
+if [ -n "$MSYSTEM" ]; then
+	export EMSDK EM_CONFIG="$EMSDK/.emscripten"
+	PATH="$EMSDK/upstream/emscripten:$(ls -d "$EMSDK"/node/*/bin | head -n 1):$(ls -d "$EMSDK"/python/*/ | head -n 1):$PATH"
+	#Windows sets OS=Windows_NT, which would skip the Makefile's uname check
+	ARGS="OS=Linux PYTHON=python"
+else
+	. "$EMSDK/emsdk_env.sh" > /dev/null
+	ARGS=
+fi
+make CC=emcc CPU=wasm $ARGS "$@" m68k.c z80.c -j2
+make CC=emcc CPU=wasm $ARGS "$@" blastem.html -j8
+ls -l blastem.js blastem.wasm
