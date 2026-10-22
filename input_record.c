@@ -13,6 +13,9 @@
 #include "blastem.h"
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+//EMSCRIPTEN_KEEPALIVE exports a function and puts it on Module as _name, so JS can
+//call it without the function being listed in the Makefile's EXPORTED_FUNCTIONS.
+//Memory crossing to JS is owned here: JS only copies through Module.HEAPU8.
 #define EXPORT EMSCRIPTEN_KEEPALIVE
 #else
 #define EXPORT
@@ -53,6 +56,10 @@ static uint32_t next_event;
 
 static uint8_t *start_state;
 static size_t start_state_size;
+
+//recordings going to or coming from JS
+static uint8_t *exchange;
+static size_t exchange_size;
 
 static uint32_t *checkpoints;
 static uint32_t num_checkpoints, checkpoints_storage;
@@ -202,13 +209,17 @@ static uint8_t *put32(uint8_t *dst, uint32_t value)
 
 //"BREC" | version | frames | state size | state | event count | events | checkpoint count | checkpoints
 //all values are little endian, as wasm is
-EXPORT uint8_t *record_data(size_t *size_out)
+//the returned buffer stays valid until the next call to record_data or playback_buffer
+EXPORT uint8_t *record_data(void)
 {
 	if (!start_state || mode == INPUT_RECORD_RECORDING) {
+		exchange_size = 0;
 		return NULL;
 	}
 	size_t size = 4 + 4 * 3 + start_state_size + 4 + num_events * sizeof(input_event) + 4 + num_checkpoints * sizeof(uint32_t);
-	uint8_t *data = malloc(size), *cur = data;
+	exchange = realloc(exchange, size);
+	exchange_size = size;
+	uint8_t *cur = exchange;
 	memcpy(cur, RECORD_MAGIC, 4);
 	cur = put32(cur + 4, RECORD_VERSION);
 	cur = put32(cur, num_frames);
@@ -218,8 +229,20 @@ EXPORT uint8_t *record_data(size_t *size_out)
 	memcpy(cur, events, num_events * sizeof(input_event));
 	cur = put32(cur + num_events * sizeof(input_event), num_checkpoints);
 	memcpy(cur, checkpoints, num_checkpoints * sizeof(uint32_t));
-	*size_out = size;
-	return data;
+	return exchange;
+}
+
+EXPORT size_t record_data_size(void)
+{
+	return exchange_size;
+}
+
+//returns a buffer for JS to copy a recording into before calling playback_start
+EXPORT uint8_t *playback_buffer(size_t size)
+{
+	exchange = realloc(exchange, size ? size : 1);
+	exchange_size = size;
+	return exchange;
 }
 
 static uint8_t get32(uint8_t **cur, uint8_t *end, uint32_t *value)
@@ -232,11 +255,15 @@ static uint8_t get32(uint8_t **cur, uint8_t *end, uint32_t *value)
 	return 1;
 }
 
-//loads a recording made by record_data, or replays the one in memory when data is NULL
-EXPORT uint8_t playback_start(uint8_t *data, size_t size)
+//loads the size bytes JS copied into playback_buffer, or replays the recording in
+//memory when size is 0
+EXPORT uint8_t playback_start(size_t size)
 {
-	if (data) {
-		uint8_t *cur = data, *end = data + size;
+	if (size) {
+		if (size > exchange_size) {
+			return 0;
+		}
+		uint8_t *data = exchange, *cur = data, *end = data + size;
 		uint32_t version, frames, state_size, count, crc_count;
 		if (size < 4 || memcmp(cur, RECORD_MAGIC, 4)) {
 			return 0;

@@ -20,8 +20,10 @@ void input_record_run_boundary(system_header *system);
 
 void record_start(void);
 void record_stop(void);
-uint8_t *record_data(size_t *size_out);
-uint8_t playback_start(uint8_t *data, size_t size);
+uint8_t *record_data(void);
+size_t record_data_size(void);
+uint8_t *playback_buffer(size_t size);
+uint8_t playback_start(size_t size);
 void playback_stop(void);
 uint32_t record_status(void);
 

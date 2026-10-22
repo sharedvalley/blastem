@@ -133,8 +133,7 @@ endif
 ifeq ($(CPU),wasm)
 CFLAGS+= --use-port=sdl2
 LDFLAGS+= --use-port=sdl2 --embed-file rom.db --embed-file default.cfg --embed-file systems.cfg \
- --embed-file shaders/ --embed-file images/ --embed-file DroidSans.ttf \
- -sEXPORTED_FUNCTIONS=_main,_handle_chooser_result,_record_start,_record_stop,_record_data,_playback_start,_playback_stop,_record_status,_malloc,_free \
+ --embed-file shaders/ --embed-file images/ --embed-file DroidSans.ttf -sEXPORTED_FUNCTIONS=_main,_handle_chooser_result \
  -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,callMain,HEAPU8 -sINITIAL_HEAP=50331648 --pre-js emscripten_pre.js -lidbfs.js
 ifdef DEBUG
 LDFLAGS+= -sASSERTIONS=2
