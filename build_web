@@ -10,7 +10,8 @@ cd "$(dirname "$0")"
 EMSDK=${EMSDK:-$(cd .. && pwd)/emsdk}
 if [ -n "$MSYSTEM" ]; then
 	export EMSDK EM_CONFIG="$EMSDK/.emscripten"
-	PATH="$EMSDK/upstream/emscripten:$(ls -d "$EMSDK"/node/*/bin | head -n 1):$(ls -d "$EMSDK"/python/*/ | head -n 1):$PATH"
+	#emcc finds node through .emscripten, but its launcher needs python on PATH
+	PATH="$EMSDK/upstream/emscripten:$(ls -d "$EMSDK"/python/*/ | head -n 1):$PATH"
 	#Windows sets OS=Windows_NT, which would skip the Makefile's uname check
 	ARGS="OS=Linux PYTHON=python"
 else
