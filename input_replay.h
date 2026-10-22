@@ -1,0 +1,25 @@
+#ifndef INPUT_REPLAY_H_
+#define INPUT_REPLAY_H_
+
+#include <stdint.h>
+#include <stddef.h>
+#include "system.h"
+
+//Recording and playback of gamepad input, built on input.h: recording is a tap on
+//the applied input, playback is an input source. A recording holds the save state
+//taken when it started, so it can start anywhere in a game.
+
+//starts and loads save states, which is only safe between runs of the system
+void input_replay_run_boundary(system_header *system);
+
+//JS API (exported with EMSCRIPTEN_KEEPALIVE)
+void record_start(void);
+void record_stop(void);
+uint8_t *record_data(void);
+size_t record_data_size(void);
+uint8_t *playback_buffer(size_t size);
+uint8_t playback_start(size_t size);
+void playback_stop(void);
+uint32_t record_status(void);
+
+#endif //INPUT_REPLAY_H_

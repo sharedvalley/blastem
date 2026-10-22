@@ -134,7 +134,10 @@ ifeq ($(CPU),wasm)
 CFLAGS+= --use-port=sdl2
 LDFLAGS+= --use-port=sdl2 --embed-file rom.db --embed-file default.cfg --embed-file systems.cfg \
  --embed-file shaders/ --embed-file images/ --embed-file DroidSans.ttf -sEXPORTED_FUNCTIONS=_main,_handle_chooser_result \
- -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,callMain -sINITIAL_HEAP=50331648 --pre-js emscripten_pre.js -lidbfs.js
+ -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,callMain,HEAPU8 -sINITIAL_HEAP=50331648 --pre-js emscripten_pre.js -lidbfs.js
+ifdef DEBUG
+LDFLAGS+= -sASSERTIONS=2
+endif
 EXE:=.html
 else #CPU=wasm
 
@@ -314,7 +317,7 @@ else
 COREOBJS+= sms.o i8255.o korean_sms_multi.o $(Z80OBJS)
 endif
 
-MAINOBJS:=$(COREOBJS) blastem.o $(RENDEROBJS) zip.o  menu.o debug.o gdb_remote.o bindings.o oscilloscope.o
+MAINOBJS:=$(COREOBJS) blastem.o $(RENDEROBJS) zip.o  menu.o debug.o gdb_remote.o bindings.o oscilloscope.o input.o input_replay.o
 
 #vfs_file.o only in this list: it is the libretro build's file layer, and the
 #standalone one keeps using stdio directly (see media_file.h).

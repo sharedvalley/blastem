@@ -1,0 +1,48 @@
+name: Web (emscripten)
+
+on:
+  push:
+    branches: [libretro]
+  pull_request:
+    branches: [libretro]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  EMSDK_VERSION: 6.0.13
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+
+      - name: Generate the 68K and Z80 cores
+        run: make CC=emcc CPU=wasm m68k.c z80.c -j2
+
+      - name: Build blastem.js and blastem.wasm
+        run: make CC=emcc CPU=wasm blastem.html -j$(nproc)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blastem-web
+          path: |
+            blastem.js
+            blastem.wasm
+
+      # A rolling release the website can download from; it does not deploy the site.
+      - name: Update the web-latest release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/libretro'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view web-latest >/dev/null 2>&1 || \
+            gh release create web-latest --prerelease --title "BlastEm web (latest libretro)" \
+              --notes "blastem.js and blastem.wasm from the latest push to libretro."
+          gh release upload web-latest blastem.js blastem.wasm --clobber

@@ -31,6 +31,7 @@
 #include "zip.h"
 #include "cdimage.h"
 #include "event_log.h"
+#include "input_replay.h"
 #ifndef DISABLE_NUKLEAR
 #include "nuklear_ui/blastem_nuklear.h"
 #endif
@@ -200,6 +201,7 @@ void browser_main_loop(void)
 			current_system = game_system;
 		} else if (!menu) {
 			if (system_started) {
+				input_replay_run_boundary(current_system);
 				current_system->resume_context(current_system);
 			} else {
 				system_started = 1;
