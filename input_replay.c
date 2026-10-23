@@ -22,9 +22,21 @@
 #endif
 
 #define RECORD_MAGIC "BREC"
-#define RECORD_VERSION 3
+#define RECORD_VERSION 4
 //version 2 checkpoints covered the whole state, so they can't be compared with version 3's
 #define FIRST_CHECKPOINTED_VERSION 3
+//version 4 records which build made it
+#define FIRST_BUILD_TAGGED_VERSION 4
+//The web and native builds don't yet replay each other's recordings identically, so a
+//recording names the build that made it and only plays back on the same kind of build.
+//Once they match, both will write "BECO" (common).
+#ifdef __EMSCRIPTEN__
+#define RECORD_BUILD "BEWE"
+#else
+#define RECORD_BUILD "BENA"
+#endif
+//recordings from before builds were tagged all came from the web build
+#define UNTAGGED_BUILD "BEWE"
 #define CHECKPOINT_FRAMES 60
 //pads plus the main unit as 16-bit values, padded to a multiple of 4 bytes
 #define PAD_STATE_BYTES 20
@@ -272,8 +284,9 @@ static uint8_t get32(uint8_t **cur, uint8_t *end, uint32_t *value)
 	return 1;
 }
 
-//"BREC" | version | frames | pad state at the start | state size | state
+//"BREC" | version | build | frames | pad state at the start | state size | state
 //| event count | events | checkpoint count | checkpoints
+//build is 4 characters (RECORD_BUILD), from version 4 on
 //all values are little endian, as wasm is
 static uint8_t parse_recording(uint8_t *data, size_t size, recording_view *out)
 {
@@ -283,8 +296,22 @@ static uint8_t parse_recording(uint8_t *data, size_t size, recording_view *out)
 		return 0;
 	}
 	cur += 4;
-	if (!get32(&cur, end, &version) || version < 2 || version > RECORD_VERSION || !get32(&cur, end, &out->frames)
-		|| end - cur < PAD_STATE_BYTES) {
+	if (!get32(&cur, end, &version) || version < 2 || version > RECORD_VERSION) {
+		return 0;
+	}
+	const char *build = UNTAGGED_BUILD;
+	if (version >= FIRST_BUILD_TAGGED_VERSION) {
+		if (end - cur < 4) {
+			return 0;
+		}
+		build = (const char *)cur;
+		cur += 4;
+	}
+	if (memcmp(build, RECORD_BUILD, 4) && memcmp(build, "BECO", 4)) {
+		warning("This recording was made by another kind of BlastEm build (%.4s, this is %s), which doesn't replay it identically yet\n", build, RECORD_BUILD);
+		return 0;
+	}
+	if (!get32(&cur, end, &out->frames) || end - cur < PAD_STATE_BYTES) {
 		return 0;
 	}
 	for (uint32_t i = 0; i < INPUT_MAX_PADS; i++)
@@ -316,12 +343,13 @@ static uint8_t parse_recording(uint8_t *data, size_t size, recording_view *out)
 //packs the recording in progress into the one buffer a finished recording lives in
 static void finish_recording(void)
 {
-	size_t size = 4 + 4 * 2 + PAD_STATE_BYTES + 4 + rec_state_size + 4 + rec_num_events * sizeof(input_event)
+	size_t size = 4 + 4 + 4 + 4 + PAD_STATE_BYTES + 4 + rec_state_size + 4 + rec_num_events * sizeof(input_event)
 		+ 4 + rec_num_checkpoints * sizeof(uint32_t);
 	uint8_t *data = malloc(size), *cur = data;
 	memcpy(cur, RECORD_MAGIC, 4);
 	cur = put32(cur + 4, RECORD_VERSION);
-	cur = put32(cur, rec_frames);
+	memcpy(cur, RECORD_BUILD, 4);
+	cur = put32(cur + 4, rec_frames);
 	uint8_t *pads = cur;
 	for (uint32_t i = 0; i < INPUT_MAX_PADS; i++)
 	{
