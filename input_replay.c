@@ -6,6 +6,7 @@
 #include "input_replay.h"
 #include "input.h"
 #include "io.h"
+#include "rom_coverage.h"
 #include "serialize.h"
 #include "zlib/zlib.h"
 #include "util.h"
@@ -75,6 +76,7 @@ static size_t exchange_size;
 enum {
 	PENDING_NONE,
 	PENDING_RECORD,
+	PENDING_PASS,
 	PENDING_PLAYBACK
 };
 static uint8_t pending;
@@ -232,6 +234,7 @@ static void replay_close(input_source *src)
 {
 	playing = 0;
 	input_remove_tap(verify_tap, NULL);
+	rom_coverage_stop();
 	if (!stopping) {
 		notify_playback_end();
 	}
@@ -333,19 +336,36 @@ static void finish_recording(void)
 	parse_recording(recording, recording_size, &view);
 }
 
+//state is the system's current state, which the recording takes over
+static void start_recording(uint8_t *state, size_t state_size)
+{
+	free(rec_state);
+	rec_state = state;
+	rec_state_size = state_size;
+	rec_initial = rec_last = *input_applied();
+	rec_num_events = rec_num_checkpoints = rec_frames = 0;
+	input_remove_tap(record_tap, NULL);
+	input_add_tap(record_tap, NULL);
+	rom_coverage_start();
+	recording_active = 1;
+}
+
 void input_replay_run_boundary(system_header *system)
 {
 	if (!pending || !system->serialize || !system->deserialize) {
 		return;
 	}
 	if (pending == PENDING_RECORD) {
-		free(rec_state);
-		rec_state = system->serialize(system, &rec_state_size);
-		rec_initial = rec_last = *input_applied();
-		rec_num_events = rec_num_checkpoints = rec_frames = 0;
-		input_remove_tap(record_tap, NULL);
-		input_add_tap(record_tap, NULL);
-		recording_active = 1;
+		size_t size;
+		uint8_t *state = system->serialize(system, &size);
+		start_recording(state, size);
+	} else if (pending == PENDING_PASS) {
+		system->deserialize(system, view.state, view.state_size);
+		input_reset_applied(&view.initial);
+		//the state itself rather than serializing it again, which isn't exactly the same
+		uint8_t *state = malloc(view.state_size);
+		memcpy(state, view.state, view.state_size);
+		start_recording(state, view.state_size);
 	} else {
 		system->deserialize(system, view.state, view.state_size);
 		//the loaded state has the recording's pads down, not the ones applied before
@@ -355,6 +375,7 @@ void input_replay_run_boundary(system_header *system)
 		reported_desync = 0;
 		input_add_tap(verify_tap, NULL);
 		input_set_source(&replay_source);
+		rom_coverage_start();
 		playing = 1;
 	}
 	pending = PENDING_NONE;
@@ -366,16 +387,47 @@ EXPORT void record_start(void)
 	pending = PENDING_RECORD;
 }
 
+//records another pass from the start of the current recording, so several passes can
+//cover more of a playable quote, returns 0 without a recording to start from
+EXPORT uint8_t record_pass_start(void)
+{
+	record_stop();
+	if (!recording) {
+		return 0;
+	}
+	playback_stop();
+	pending = PENDING_PASS;
+	return 1;
+}
+
 EXPORT void record_stop(void)
 {
-	if (pending == PENDING_RECORD) {
+	if (pending == PENDING_RECORD || pending == PENDING_PASS) {
 		pending = PENDING_NONE;
 	}
 	if (recording_active) {
 		recording_active = 0;
 		input_remove_tap(record_tap, NULL);
+		rom_coverage_stop();
 		finish_recording();
 	}
+}
+
+//the ROM bytes the last recording or playback read, one bit per byte of the ROM file,
+//kind is COVERAGE_READ (any read) or COVERAGE_FETCH (68K instruction words)
+EXPORT const uint8_t *record_coverage(uint8_t kind)
+{
+	return kind < COVERAGE_KINDS ? rom_coverage_bitmap(kind) : NULL;
+}
+
+EXPORT size_t record_coverage_size(void)
+{
+	return rom_coverage_bitmap_size();
+}
+
+EXPORT uint32_t record_rom_size(void)
+{
+	return rom_coverage_rom_size();
 }
 
 //the current recording, valid until the next recording or load

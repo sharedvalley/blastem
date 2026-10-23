@@ -1,7 +1,58 @@
 #include <string.h>
+#include "rom_coverage.h"
 #ifdef DEBUG_DISASM
 #include "68kinst.h"
 #endif
+
+//While ROM coverage is on, the read handlers are wrapped to mark what they read, so
+//m68k_read_8 and m68k_read_16, inlined into every instruction, need no check. Only one
+//context's handlers are wrapped at a time: the main CPU's, which sees the cartridge.
+static interp_read_16 unwrapped_read16[256];
+static interp_read_8 unwrapped_read8[256];
+
+static void m68k_cover_rom(m68k_context *context, uint32_t address, uint32_t size)
+{
+	void *word = get_native_pointer(address & ~1, (void **)context->mem_pointers, &context->opts->gen);
+	if (!word) {
+		return;
+	}
+	//instruction words are read with scratch1 holding pc (m68k_prefetch)
+	uint8_t fetch = size == 2 && address == (context->pc & context->opts->gen.address_mask);
+	rom_coverage_mark_ptr(word, size, size == 1 ? address & 1 : 0, fetch ? COVERAGE_FETCH : COVERAGE_READ);
+}
+
+static uint16_t covered_read_16(uint32_t address, void *context, void *data)
+{
+	uint16_t value = unwrapped_read16[address >> 16](address, context, data);
+	m68k_cover_rom(context, address, 2);
+	return value;
+}
+
+static uint8_t covered_read_8(uint32_t address, void *context, void *data)
+{
+	uint8_t value = unwrapped_read8[address >> 16](address, context, data);
+	m68k_cover_rom(context, address, 1);
+	return value;
+}
+
+void m68k_cover_rom_reads(m68k_context *context, uint8_t enable)
+{
+	if (enable == (context->read16[0] == covered_read_16)) {
+		return;
+	}
+	for (int i = 0; i < 256; i++)
+	{
+		if (enable) {
+			unwrapped_read16[i] = context->read16[i];
+			unwrapped_read8[i] = context->read8[i];
+			context->read16[i] = covered_read_16;
+			context->read8[i] = covered_read_8;
+		} else {
+			context->read16[i] = unwrapped_read16[i];
+			context->read8[i] = unwrapped_read8[i];
+		}
+	}
+}
 
 void m68k_read_8(m68k_context *context)
 {
