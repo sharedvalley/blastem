@@ -270,6 +270,11 @@ ifdef NEW_CORE
 NEW_Z80:=1
 M68KOBJS+= m68k.o
 CFLAGS+= -DNEW_CORE
+#the SH-2 core uses the x86 backend's memory access functions on x86 whichever 68K
+#core is used
+ifneq (,$(filter x86_64 i686,$(CPU)))
+TRANSOBJS+= gen_x86.o backend_x86.o
+endif
 else
 ifeq ($(CPU),x86_64)
 M68KOBJS+= m68k_core.o m68k_core_x86.o
@@ -309,7 +314,7 @@ COREOBJS:=system.o genesis.o vdp.o io.o romdb.o hash.o xband.o realtec.o i2c.o n
 	$(TRANSOBJS) $(AUDIOOBJS) saves.o jcart.o gen_player.o coleco.o pico_pcm.o ymz263b.o \
 	segacd.o lc8951.o cdimage.o chdimage.o $(BUNDLED_LIBCHDR) cdd_mcu.o cd_graphics.o cdd_fader.o sft_mapper.o mediaplayer.o \
 	laseractive.o upd78k2_dis.o upd78k2.o osd_font.o pd0178.o radica.o 32x.o 32x_video.o sh2.o \
-	sh2_decode.o sh7095.o
+	sh2_decode.o sh7095.o rom_coverage.o
 
 ifdef NOZ80
 CFLAGS+=-DNO_Z80

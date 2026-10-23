@@ -23,6 +23,7 @@ declare
 	void insert_breakpoint(m68k_context *context, uint32_t address, debug_handler handler);
 	void remove_breakpoint(m68k_context *context, uint32_t address);
 	uint16_t m68k_instruction_fetch(uint32_t address, void *vcontext);
+	void m68k_cover_rom_reads(m68k_context *context, uint8_t enable);
 	define NUM_MEM_AREAS 10
 	define M68K_OPT_BROKEN_READ_MODIFY 1
 	define INT_PENDING_SR_CHANGE 254

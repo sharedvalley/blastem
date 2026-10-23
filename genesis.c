@@ -15,6 +15,7 @@
 #include "gst.h"
 #include "util.h"
 #include "debug.h"
+#include "rom_coverage.h"
 #include "gdb_remote.h"
 #include "saves.h"
 #include "bindings.h"
@@ -278,6 +279,9 @@ void genesis_deserialize(deserialize_buffer *buf, genesis_context *gen)
 	}
 	gen_update_z80_bank_pointer(gen);
 	adjust_int_cycle(gen->m68k, gen->vdp);
+	//frames are counted from here, e.g. for -b, rather than from the frame number the
+	//system had before the state
+	gen->last_frame = gen->vdp->frame;
 #ifndef NEW_CORE
 	//HACK: Fix this once PC/IR is represented in a better way in 68K core
 	//Would be better for this hack to live in side the 68K core itself, but it's better to do it
@@ -335,7 +339,11 @@ uint16_t read_dma_value(uint32_t address)
 		}
 	}
 
-	return read_word(address, (void **)genesis->m68k->mem_pointers, &genesis->m68k->opts->gen, genesis->m68k);
+	uint16_t value = read_word(address, (void **)genesis->m68k->mem_pointers, &genesis->m68k->opts->gen, genesis->m68k);
+	if (rom_coverage_active) {
+		rom_coverage_mark_ptr(get_native_pointer(address, (void **)genesis->m68k->mem_pointers, &genesis->m68k->opts->gen), 2, 0, COVERAGE_READ);
+	}
+	return value;
 }
 
 void vdp_dma_started(void)
@@ -1799,6 +1807,9 @@ static uint8_t z80_read_bank(uint32_t location, void * vcontext)
 
 	location &= 0x7FFF;
 	if (context->mem_pointers[1]) {
+		if (rom_coverage_active) {
+			rom_coverage_mark_ptr(context->mem_pointers[1] + (location & ~1), 1, location & 1, COVERAGE_READ);
+		}
 		return context->mem_pointers[1][location ^ 1];
 	}
 	uint32_t address = gen->z80_bank_reg << 15 | location;
@@ -2962,6 +2973,14 @@ static genesis_context *shared_init(uint32_t system_opts, rom_info *rom, uint8_t
 	return gen;
 }
 
+static void cover_rom_reads(void *vgen, uint8_t enable)
+{
+#ifdef NEW_CORE
+	genesis_context *gen = vgen;
+	m68k_cover_rom_reads(gen->m68k, enable);
+#endif
+}
+
 static genesis_context *shared_init_gen(rom_info info, void *lock_on, uint32_t lock_on_size, uint32_t ym_opts, uint8_t force_region)
 {
 	void *rom = info.rom;
@@ -2985,6 +3004,7 @@ static genesis_context *shared_init_gen(rom_info info, void *lock_on, uint32_t l
 
 	gen->cart = rom;
 	gen->lock_on = lock_on;
+	rom_coverage_init(rom, rom_size, cover_rom_reads, gen);
 
 	setup_io_devices(config, &info, &gen->io);
 	gen->header.has_keyboard = io_has_keyboard(&gen->io);
