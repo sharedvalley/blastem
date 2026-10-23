@@ -6,6 +6,7 @@
 #include "input_replay.h"
 #include "input.h"
 #include "io.h"
+#include "serialize.h"
 #include "zlib/zlib.h"
 #include "util.h"
 #ifdef __EMSCRIPTEN__
@@ -19,7 +20,9 @@
 #endif
 
 #define RECORD_MAGIC "BREC"
-#define RECORD_VERSION 2
+#define RECORD_VERSION 3
+//version 2 checkpoints covered the whole state, so they can't be compared with version 3's
+#define FIRST_CHECKPOINTED_VERSION 3
 #define CHECKPOINT_FRAMES 60
 //pads plus the main unit as 16-bit values, padded to a multiple of 4 bytes
 #define PAD_STATE_BYTES 20
@@ -92,11 +95,43 @@ static void notify_playback_end(void) {}
 static void notify_desync(uint32_t frame) {}
 #endif
 
+//Video and sound chip internals, e.g. line fetch buffers and operator phases, don't
+//survive a save state round trip exactly, and the game can't observe them, so a
+//checkpoint covers the CPUs, memories and the rest of the state they can see
+static uint8_t checkpointed_section(uint16_t id)
+{
+	switch (id)
+	{
+	case SECTION_VDP:
+	case SECTION_YM2612:
+	case SECTION_PSG:
+	case SECTION_RF5C164:
+	case SECTION_CDD_FADER:
+		return 0;
+	default:
+		return 1;
+	}
+}
+
 static uint32_t state_crc(system_header *system)
 {
 	size_t size;
 	uint8_t *state = system->serialize(system, &size);
-	uint32_t crc = crc32(0, state, size);
+	uint32_t crc = crc32(0, NULL, 0);
+	//sections are a big endian 16-bit id and 32-bit size, then the data
+	for (size_t offset = 0; size - offset >= 6;)
+	{
+		uint16_t id = state[offset] << 8 | state[offset + 1];
+		uint32_t section_size = (uint32_t)state[offset + 2] << 24 | state[offset + 3] << 16
+			| state[offset + 4] << 8 | state[offset + 5];
+		if (section_size > size - offset - 6) {
+			break;
+		}
+		if (checkpointed_section(id)) {
+			crc = crc32(crc, state + offset, 6 + section_size);
+		}
+		offset += 6 + section_size;
+	}
 	free(state);
 	return crc;
 }
@@ -240,7 +275,7 @@ static uint8_t parse_recording(uint8_t *data, size_t size, recording_view *out)
 		return 0;
 	}
 	cur += 4;
-	if (!get32(&cur, end, &version) || version != RECORD_VERSION || !get32(&cur, end, &out->frames)
+	if (!get32(&cur, end, &version) || version < 2 || version > RECORD_VERSION || !get32(&cur, end, &out->frames)
 		|| end - cur < PAD_STATE_BYTES) {
 		return 0;
 	}
@@ -264,6 +299,9 @@ static uint8_t parse_recording(uint8_t *data, size_t size, recording_view *out)
 		return 0;
 	}
 	out->checkpoints = cur;
+	if (version < FIRST_CHECKPOINTED_VERSION) {
+		out->num_checkpoints = 0;
+	}
 	return 1;
 }
 
