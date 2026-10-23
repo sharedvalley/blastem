@@ -11,6 +11,13 @@
 
 //starts and loads save states, which is only safe between runs of the system
 void input_replay_run_boundary(system_header *system);
+//whether a recording or playback waits for input_replay_run_boundary
+uint8_t input_replay_pending(void);
+//writes the current recording to a file
+uint8_t input_replay_save(const char *path);
+//plays a recording from a file, as written by input_replay_save or a .blrec from the
+//website, returns 0 if it can't be read
+uint8_t input_replay_load(const char *path);
 
 //JS API (exported with EMSCRIPTEN_KEEPALIVE)
 void record_start(void);

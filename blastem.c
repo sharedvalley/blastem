@@ -402,6 +402,17 @@ char *parse_addr_port(char *arg)
 	return NULL;
 }
 
+static char *record_path;
+static void save_recording(void)
+{
+	record_stop();
+	if (input_replay_save(record_path)) {
+		printf("Saved the recording to %s\n", record_path);
+	} else {
+		warning("Failed to save the recording to %s\n", record_path);
+	}
+}
+
 int main(int argc, char ** argv)
 {
 	set_exe_str(argv[0]);
@@ -421,6 +432,7 @@ int main(int argc, char ** argv)
 	system_type stype = SYSTEM_UNKNOWN, force_stype = SYSTEM_UNKNOWN;
 	char * romfname = NULL;
 	char * statefile = NULL;
+	char *replay_path = NULL;
 	char *reader_addr = NULL, *reader_port = NULL;
 	event_reader reader = {0};
 	debugger_type dtype = DEBUGGER_NATIVE;
@@ -533,6 +545,20 @@ int main(int argc, char ** argv)
 			case 't':
 				force_no_terminal();
 				break;
+			case 'R':
+				i++;
+				if (i >= argc) {
+					fatal_error("-R must be followed by a recording filename\n");
+				}
+				replay_path = argv[i];
+				break;
+			case 'W':
+				i++;
+				if (i >= argc) {
+					fatal_error("-W must be followed by a recording filename\n");
+				}
+				record_path = argv[i];
+				break;
 			case 'y':
 				opts |= YM_OPT_WAVE_LOG;
 				break;
@@ -567,6 +593,8 @@ int main(int argc, char ** argv)
 					"	-f          Toggles fullscreen mode\n"
 					"	-g          Disable OpenGL rendering\n"
 					"	-s FILE     Load a GST format savestate from FILE\n"
+					"	-R FILE     Play the input recording in FILE once the game starts\n"
+					"	-W FILE     Record inputs once the game starts and write them to FILE on exit\n"
 					"	-o FILE     Load FILE as a lock-on cartridge\n"
 					"	-d          Enter debugger on startup\n"
 					"	-n          Disable Z80\n"
@@ -720,6 +748,14 @@ int main(int argc, char ** argv)
 
 	current_system->debugger_type = dtype;
 	current_system->enter_debugger = start_in_debugger && menu == debug_target;
+	if (replay_path && !input_replay_load(replay_path)) {
+		fatal_error("Failed to load the recording %s\n", replay_path);
+	}
+	if (record_path) {
+		record_start();
+		//-b ends with exit(), so the recording is written from an exit handler
+		atexit(save_recording);
+	}
 #ifndef __EMSCRIPTEN__
 	current_system->start_context(current_system,  menu ? NULL : statefile);
 	render_video_loop();
@@ -755,6 +791,10 @@ int main(int argc, char ** argv)
 			current_system->start_context(current_system, statefile);
 			render_video_loop();
 		} else if (was_paused) {
+			current_system->resume_context(current_system);
+		} else if (!menu && input_replay_pending()) {
+			//a recording or playback asked the system to return so it can start
+			input_replay_run_boundary(current_system);
 			current_system->resume_context(current_system);
 		} else if (menu && game_system) {
 			current_system->arena = set_current_arena(game_system->arena);

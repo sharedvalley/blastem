@@ -279,6 +279,9 @@ void genesis_deserialize(deserialize_buffer *buf, genesis_context *gen)
 	}
 	gen_update_z80_bank_pointer(gen);
 	adjust_int_cycle(gen->m68k, gen->vdp);
+	//frames are counted from here, e.g. for -b, rather than from the frame number the
+	//system had before the state
+	gen->last_frame = gen->vdp->frame;
 #ifndef NEW_CORE
 	//HACK: Fix this once PC/IR is represented in a better way in 68K core
 	//Would be better for this hack to live in side the 68K core itself, but it's better to do it
