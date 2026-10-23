@@ -1342,6 +1342,9 @@ static uint8_t interlaced;
 void render_update_display();
 void render_framebuffer_updated(uint8_t which, int width)
 {
+	if (headless) {
+		return;
+	}
 	uint32_t height = which <= FRAMEBUFFER_EVEN 
 		? (video_standard == VID_NTSC ? 243 : 294) - (overscan_top[video_standard] + overscan_bot[video_standard])
 		: 240;

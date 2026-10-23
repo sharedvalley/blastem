@@ -1,6 +1,7 @@
 //Records gamepad input and plays it back. Recording is a tap on the input applied
 //each frame (input.h), playback an input source, so neither needs to know where
 //input comes from, and the live, recorded and replayed paths are the same code.
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "input_replay.h"
@@ -93,7 +94,11 @@ EM_JS(void, notify_desync, (uint32_t frame), {
 	}
 });
 #else
-static void notify_playback_end(void) {}
+static void notify_playback_end(void)
+{
+	puts("Playback finished");
+}
+//the desync itself is already reported as a warning
 static void notify_desync(uint32_t frame) {}
 #endif
 
@@ -336,6 +341,32 @@ static void finish_recording(void)
 	parse_recording(recording, recording_size, &view);
 }
 
+#ifndef __EMSCRIPTEN__
+//Natively a system runs until asked to return, unlike the web build where it returns
+//every frame, so a pending recording or playback asks it to at the end of a frame
+static void boundary_tap(void *data, system_header *system, const pad_state *applied)
+{
+	input_remove_tap(boundary_tap, NULL);
+	system_request_exit(system, 0);
+}
+#endif
+
+static void set_pending(uint8_t new_pending)
+{
+	pending = new_pending;
+#ifndef __EMSCRIPTEN__
+	input_remove_tap(boundary_tap, NULL);
+	if (pending) {
+		input_add_tap(boundary_tap, NULL);
+	}
+#endif
+}
+
+uint8_t input_replay_pending(void)
+{
+	return pending != PENDING_NONE;
+}
+
 //state is the system's current state, which the recording takes over
 static void start_recording(uint8_t *state, size_t state_size)
 {
@@ -378,13 +409,13 @@ void input_replay_run_boundary(system_header *system)
 		rom_coverage_start();
 		playing = 1;
 	}
-	pending = PENDING_NONE;
+	set_pending(PENDING_NONE);
 }
 
 EXPORT void record_start(void)
 {
 	playback_stop();
-	pending = PENDING_RECORD;
+	set_pending(PENDING_RECORD);
 }
 
 //records another pass from the start of the current recording, so several passes can
@@ -396,14 +427,14 @@ EXPORT uint8_t record_pass_start(void)
 		return 0;
 	}
 	playback_stop();
-	pending = PENDING_PASS;
+	set_pending(PENDING_PASS);
 	return 1;
 }
 
 EXPORT void record_stop(void)
 {
 	if (pending == PENDING_RECORD || pending == PENDING_PASS) {
-		pending = PENDING_NONE;
+		set_pending(PENDING_NONE);
 	}
 	if (recording_active) {
 		recording_active = 0;
@@ -471,14 +502,14 @@ EXPORT uint8_t playback_start(size_t size)
 	} else {
 		playback_stop();
 	}
-	pending = PENDING_PLAYBACK;
+	set_pending(PENDING_PLAYBACK);
 	return 1;
 }
 
 EXPORT void playback_stop(void)
 {
 	if (pending == PENDING_PLAYBACK) {
-		pending = PENDING_NONE;
+		set_pending(PENDING_NONE);
 	}
 	if (playing) {
 		stopping = 1;
@@ -498,4 +529,55 @@ EXPORT uint32_t record_status(void)
 		return 2U << 30 | (play_frame & 0x3FFFFFFF);
 	}
 	return recording ? view.frames & 0x3FFFFFFF : 0;
+}
+
+uint8_t input_replay_save(const char *path)
+{
+	if (!recording) {
+		return 0;
+	}
+	FILE *f = fopen(path, "wb");
+	if (!f) {
+		return 0;
+	}
+	uint8_t written = fwrite(recording, 1, recording_size, f) == recording_size;
+	return !fclose(f) && written;
+}
+
+//gzip("BLREC1\n" + JSON header + "\n" + recording), the website's format
+#define WEB_MAGIC "BLREC1\n"
+
+uint8_t input_replay_load(const char *path)
+{
+	//gzread reads files that aren't compressed as they are
+	gzFile f = gzopen(path, "rb");
+	if (!f) {
+		return 0;
+	}
+	size_t size = 0, storage = 64 * 1024;
+	uint8_t *data = malloc(storage);
+	int read;
+	while ((read = gzread(f, data + size, storage - size)) > 0)
+	{
+		size += read;
+		if (size == storage) {
+			storage *= 2;
+			data = realloc(data, storage);
+		}
+	}
+	gzclose(f);
+	uint8_t *start = data;
+	size_t magic_size = strlen(WEB_MAGIC);
+	if (read == 0 && size > magic_size && !memcmp(data, WEB_MAGIC, magic_size)) {
+		uint8_t *header_end = memchr(data + magic_size, '\n', size - magic_size);
+		start = header_end ? header_end + 1 : NULL;
+	}
+	if (read < 0 || !start) {
+		free(data);
+		return 0;
+	}
+	size -= start - data;
+	memcpy(playback_buffer(size), start, size);
+	free(data);
+	return playback_start(size);
 }

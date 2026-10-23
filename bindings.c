@@ -12,6 +12,7 @@
 #include "bindings.h"
 #include "controller_info.h"
 #include "input.h"
+#include "input_replay.h"
 #ifndef DISABLE_NUKLEAR
 #include "nuklear_ui/blastem_nuklear.h"
 #endif
@@ -51,7 +52,10 @@ typedef enum {
 	UI_CD_GRAPHICS_DEBUG,
 	UI_PASTE,
 	UI_PAUSE,
-	UI_ADVANCE
+	UI_ADVANCE,
+	UI_RECORD_INPUTS,
+	UI_RECORD_PASS,
+	UI_PLAY_RECORDING
 } ui_action;
 
 typedef struct {
@@ -285,6 +289,25 @@ static uint8_t mouse_captured;
 #define localtime_r(a,b) localtime(a)
 #endif
 
+char *get_content_config_path(char *config_path, char *config_template, char *default_name);
+
+//stops a recording in progress and saves it, returns whether one was in progress
+static uint8_t stop_recording(void)
+{
+	if (record_status() >> 30 != 1) {
+		return 0;
+	}
+	record_stop();
+	char *path = get_content_config_path("ui\0recording_path\0", "ui\0recording_template\0", "blastem_%Y%m%d_%H%M%S.brec");
+	if (input_replay_save(path)) {
+		printf("Saved the recording to %s\n", path);
+	} else {
+		warning("Failed to save the recording to %s\n", path);
+	}
+	free(path);
+	return 1;
+}
+
 char *get_content_config_path(char *config_path, char *config_template, char *default_name)
 {
 	char *base = tern_find_path(config, config_path, TVAL_PTR).ptrval;
@@ -504,6 +527,37 @@ void handle_binding_up(keybinding * binding)
 			if (allow_content_binds) {
 				current_system->frame_advance = 1;
 				current_system->paused = 0;
+			}
+			break;
+		case UI_RECORD_INPUTS:
+			if (allow_content_binds) {
+				if (!stop_recording()) {
+					record_start();
+					puts("Recording inputs");
+				}
+			}
+			break;
+		case UI_RECORD_PASS:
+			if (allow_content_binds) {
+				stop_recording();
+				if (record_pass_start()) {
+					puts("Recording another pass from the start of the last recording");
+				} else {
+					warning("Record or play a recording before recording another pass of it\n");
+				}
+			}
+			break;
+		case UI_PLAY_RECORDING:
+			if (allow_content_binds) {
+				stop_recording();
+				if (record_status() >> 30 == 2) {
+					playback_stop();
+					puts("Playback stopped");
+				} else if (playback_start(0)) {
+					puts("Playing the last recording");
+				} else {
+					warning("There is no recording to play\n");
+				}
 			}
 			break;
 		}
@@ -748,6 +802,12 @@ int parse_binding_target(int device_num, const char * target, tern_node * padbut
 			*subtype_a = UI_PAUSE;
 		} else if (!strcmp(target + 3, "advance")) {
 			*subtype_a = UI_ADVANCE;
+		} else if (!strcmp(target + 3, "record_inputs")) {
+			*subtype_a = UI_RECORD_INPUTS;
+		} else if (!strcmp(target + 3, "record_pass")) {
+			*subtype_a = UI_RECORD_PASS;
+		} else if (!strcmp(target + 3, "play_recording")) {
+			*subtype_a = UI_PLAY_RECORDING;
 		} else {
 			warning("Unreconized UI binding type %s\n", target);
 			return 0;

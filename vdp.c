@@ -3109,6 +3109,10 @@ static void advance_output_line(vdp_context *context)
 			context->cur_buffer = is_even ? FRAMEBUFFER_EVEN : FRAMEBUFFER_ODD;
 			context->pushed_frame = 1;
 			context->fb = NULL;
+		} else {
+			//nothing is drawn, but the frontend still learns that a frame ended, e.g. to
+			//apply the input for the next one
+			render_framebuffer_updated(FRAMEBUFFER_ODD, LINEBUF_SIZE);
 		}
 		vdp_update_per_frame_debug(context);
 		context->h40_lines = 0;
