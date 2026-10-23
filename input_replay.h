@@ -14,7 +14,11 @@ void input_replay_run_boundary(system_header *system);
 
 //JS API (exported with EMSCRIPTEN_KEEPALIVE)
 void record_start(void);
+uint8_t record_pass_start(void);
 void record_stop(void);
+const uint8_t *record_coverage(uint8_t kind);
+size_t record_coverage_size(void);
+uint32_t record_rom_size(void);
 uint8_t *record_data(void);
 size_t record_data_size(void);
 uint8_t *playback_buffer(size_t size);
