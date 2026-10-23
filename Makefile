@@ -270,6 +270,11 @@ ifdef NEW_CORE
 NEW_Z80:=1
 M68KOBJS+= m68k.o
 CFLAGS+= -DNEW_CORE
+#the SH-2 core uses the x86 backend's memory access functions on x86 whichever 68K
+#core is used
+ifneq (,$(filter x86_64 i686,$(CPU)))
+TRANSOBJS+= gen_x86.o backend_x86.o
+endif
 else
 ifeq ($(CPU),x86_64)
 M68KOBJS+= m68k_core.o m68k_core_x86.o

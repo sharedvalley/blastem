@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#Builds a native Windows blastem.exe with the MSYS2 MinGW-w64 toolchain, for faster
+#iteration than the web build. It uses the generated 68K and Z80 cores (NEW_CORE), as
+#the web build does, since ROM coverage tracking only exists there. Extra arguments go
+#to make, e.g. ./build_native DEBUG=1 for a debug build.
+#Needs the packages mingw-w64-x86_64-gcc, -SDL2, -glew and -pkgconf. Run it from any
+#MSYS2 shell; it switches to the MINGW64 environment itself.
+set -e
+cd "$(dirname "$0")"
+if [ "$MSYSTEM" != MINGW64 ]; then
+	exec /usr/bin/env MSYSTEM=MINGW64 MSYS2_PATH_TYPE=inherit CHERE_INVOKING=1 /usr/bin/bash -lc './build_native "$@"' build_native "$@"
+fi
+#The Makefile's Windows section is written for cross-compiling from Linux, so the
+#compiler and library locations are pointed at MSYS2's. Objects go to their own
+#directory, as obj/release holds the web build's. -mconsole comes after the Makefile's
+#-mwindows so log output reaches the terminal.
+make OS=Windows CPU=x86_64 NEW_CORE=1 NOLTO=1 \
+	CC=gcc WINDRES=windres PYTHON="${PYTHON:-python}" \
+	SDL2_PREFIX=/mingw64 GLEW_PREFIX=/mingw64 GLEW32S_LIB=/mingw64/lib/libglew32.a \
+	EXTRA_NUKLEAR_LDFLAGS=-mconsole \
+	OBJDIR=obj/native$( [[ " $* " == *" DEBUG=1 "* ]] && echo -debug ) \
+	"$@" blastem.exe -j"$(nproc)"
+#so blastem.exe also runs outside the MSYS2 shell
+cp -u /mingw64/bin/SDL2.dll .
+ls -l blastem.exe
