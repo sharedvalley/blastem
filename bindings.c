@@ -13,6 +13,7 @@
 #include "controller_info.h"
 #include "input.h"
 #include "input_replay.h"
+#include "quote.h"
 #ifndef DISABLE_NUKLEAR
 #include "nuklear_ui/blastem_nuklear.h"
 #endif
@@ -55,7 +56,8 @@ typedef enum {
 	UI_ADVANCE,
 	UI_RECORD_INPUTS,
 	UI_RECORD_PASS,
-	UI_PLAY_RECORDING
+	UI_PLAY_RECORDING,
+	UI_BUILD_QUOTE
 } ui_action;
 
 typedef struct {
@@ -541,6 +543,8 @@ void handle_binding_up(keybinding * binding)
 			if (allow_content_binds) {
 				stop_recording();
 				if (record_pass_start()) {
+					//e.g. after leaving a playable quote, which pauses
+					current_system->paused = 0;
 					puts("Recording another pass from the start of the last recording");
 				} else {
 					warning("Record or play a recording before recording another pass of it\n");
@@ -554,10 +558,20 @@ void handle_binding_up(keybinding * binding)
 					playback_stop();
 					puts("Playback stopped");
 				} else if (playback_start(0)) {
+					current_system->paused = 0;
 					puts("Playing the last recording");
 				} else {
 					warning("There is no recording to play\n");
 				}
+			}
+			break;
+		case UI_BUILD_QUOTE:
+			if (allow_content_binds) {
+				stop_recording();
+				char *path = get_content_config_path("ui\0recording_path\0", "ui\0quote_template\0", "blastem_%Y%m%d_%H%M%S.pq");
+				//the first pass is the quote's replay, the others add the ROM they read
+				quote_save(current_system->info.name, path);
+				free(path);
 			}
 			break;
 		}
@@ -808,6 +822,8 @@ int parse_binding_target(int device_num, const char * target, tern_node * padbut
 			*subtype_a = UI_RECORD_PASS;
 		} else if (!strcmp(target + 3, "play_recording")) {
 			*subtype_a = UI_PLAY_RECORDING;
+		} else if (!strcmp(target + 3, "build_quote")) {
+			*subtype_a = UI_BUILD_QUOTE;
 		} else {
 			warning("Unreconized UI binding type %s\n", target);
 			return 0;

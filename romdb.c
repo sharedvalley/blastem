@@ -4,6 +4,7 @@
 #include "romdb.h"
 #include "util.h"
 #include "hash.h"
+#include "quote.h"
 #include "genesis.h"
 #include "menu.h"
 #include "xband.h"
@@ -1136,6 +1137,11 @@ void map_iter_fun(char *key, tern_val val, uint8_t valtype, void *data)
 		}
 		//TODO: detect if this conflicts with host cart mapper
 		state->info->mapper_start_index = lock_info.mapper_start_index;
+		//e.g. Sonic 3's SRAM switch on Sonic & Knuckles: states only save the registers of
+		//a mapper the system knows the type of
+		if (state->info->mapper_type == MAPPER_NONE) {
+			state->info->mapper_type = lock_info.mapper_type;
+		}
 		uint32_t matching_chunks = 0;
 		for (int i = 0; i < lock_info.map_chunks; i++)
 		{
@@ -1426,10 +1432,16 @@ static tern_node *find_romdb_entry_gen(tern_node *rom_db, uint8_t *rom, uint32_t
 
 	}
 	debug_message("Product ID: %s\n", product_id);
-	uint8_t raw_hash[20];
-	sha1(rom, rom_size, raw_hash);
 	uint8_t hex_hash[41];
-	bin_to_hex(hex_hash, raw_hash, 20);
+	//a playable quote keeps only part of the ROM, so it carries the whole one's hash
+	const char *quote_hash = quote_rom_sha1(rom);
+	if (quote_hash) {
+		memcpy(hex_hash, quote_hash, sizeof(hex_hash));
+	} else {
+		uint8_t raw_hash[20];
+		sha1(rom, rom_size, raw_hash);
+		bin_to_hex(hex_hash, raw_hash, 20);
+	}
 	debug_message("SHA1: %s\n", hex_hash);
 	tern_node * entry = tern_find_node(rom_db, hex_hash);
 	if (entry) {

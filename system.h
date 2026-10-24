@@ -174,6 +174,10 @@ struct system_header {
 	char              *save_dir;
 	char              *paste_buffer;
 	uint32_t          paste_cur_char;
+	//a state to start from instead of a reset, e.g. a playable quote's, which has
+	//only the ROM it needs from there on (Genesis only)
+	uint8_t           *start_state;
+	size_t            start_state_size;
 	int               enter_debugger_frames;
 	uint8_t           enter_debugger;
 	uint8_t           should_exit;

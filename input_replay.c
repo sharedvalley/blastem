@@ -7,6 +7,7 @@
 #include "input_replay.h"
 #include "input.h"
 #include "io.h"
+#include "quote.h"
 #include "rom_coverage.h"
 #include "serialize.h"
 #include "zlib/zlib.h"
@@ -78,6 +79,7 @@ static uint32_t rec_frames;
 
 //playback
 static uint8_t playing, stopping;
+static system_header *play_system;
 static pad_state play_state;
 static uint32_t play_frame, play_next_event;
 static uint8_t reported_desync;
@@ -94,6 +96,14 @@ enum {
 };
 static uint8_t pending;
 
+//the web build tells JS instead, through Module.onBlastemPlaybackEnd
+static input_replay_end_handler end_handler;
+
+void input_replay_on_playback_end(input_replay_end_handler handler)
+{
+	end_handler = handler;
+}
+
 #ifdef __EMSCRIPTEN__
 EM_JS(void, notify_playback_end, (void), {
 	if (Module.onBlastemPlaybackEnd) {
@@ -108,7 +118,9 @@ EM_JS(void, notify_desync, (uint32_t frame), {
 #else
 static void notify_playback_end(void)
 {
-	puts("Playback finished");
+	if (end_handler) {
+		end_handler();
+	}
 }
 //the desync itself is already reported as a warning
 static void notify_desync(uint32_t frame) {}
@@ -253,6 +265,14 @@ static void replay_close(input_source *src)
 	input_remove_tap(verify_tap, NULL);
 	rom_coverage_stop();
 	if (!stopping) {
+		//played to the end, so it read what its recording did
+		quote_add_pass(recording, recording_size, view.state, view.state_size, rom_coverage_bitmap(COVERAGE_READ));
+#ifndef __EMSCRIPTEN__
+		//the state it ends in, to compare runs, e.g. of a quote and of the whole ROM
+		if (play_system && play_system->serialize) {
+			printf("Playback finished in state %08X\n", state_crc(play_system));
+		}
+#endif
 		notify_playback_end();
 	}
 }
@@ -409,6 +429,35 @@ static void start_recording(uint8_t *state, size_t state_size)
 	recording_active = 1;
 }
 
+//plays the current recording, with the system at its start state
+static void begin_playback(system_header *system)
+{
+	//the loaded state has the recording's pads down, not the ones applied before
+	input_reset_applied(&view.initial);
+	quote_rearm();
+	play_system = system;
+	play_state = view.initial;
+	play_frame = play_next_event = 0;
+	reported_desync = 0;
+	input_add_tap(verify_tap, NULL);
+	input_set_source(&replay_source);
+	rom_coverage_start();
+	playing = 1;
+}
+
+void input_replay_play_started(system_header *system)
+{
+	if (!recording) {
+		return;
+	}
+	begin_playback(system);
+	//A system that hasn't run a frame yet differs from one between frames in VDP
+	//timing state that states don't keep, which moves when input arrives. So the first
+	//frame plays the recording, and its state is loaded again after it, as for any
+	//other playback.
+	set_pending(PENDING_PLAYBACK);
+}
+
 void input_replay_run_boundary(system_header *system)
 {
 	if (!pending || !system->serialize || !system->deserialize) {
@@ -421,21 +470,20 @@ void input_replay_run_boundary(system_header *system)
 	} else if (pending == PENDING_PASS) {
 		system->deserialize(system, view.state, view.state_size);
 		input_reset_applied(&view.initial);
+		quote_rearm();
 		//the state itself rather than serializing it again, which isn't exactly the same
 		uint8_t *state = malloc(view.state_size);
 		memcpy(state, view.state, view.state_size);
 		start_recording(state, view.state_size);
 	} else {
+		if (playing) {
+			//restarting it, so it didn't finish
+			stopping = 1;
+			input_set_source(NULL);
+			stopping = 0;
+		}
 		system->deserialize(system, view.state, view.state_size);
-		//the loaded state has the recording's pads down, not the ones applied before
-		input_reset_applied(&view.initial);
-		play_state = view.initial;
-		play_frame = play_next_event = 0;
-		reported_desync = 0;
-		input_add_tap(verify_tap, NULL);
-		input_set_source(&replay_source);
-		rom_coverage_start();
-		playing = 1;
+		begin_playback(system);
 	}
 	set_pending(PENDING_NONE);
 }
@@ -469,7 +517,48 @@ EXPORT void record_stop(void)
 		input_remove_tap(record_tap, NULL);
 		rom_coverage_stop();
 		finish_recording();
+		quote_add_pass(recording, recording_size, view.state, view.state_size, rom_coverage_bitmap(COVERAGE_READ));
 	}
+}
+
+//the start state of the current recording
+const uint8_t *input_replay_start_state(size_t *size)
+{
+	*size = recording ? view.state_size : 0;
+	return recording ? view.state : NULL;
+}
+
+static uint8_t *built_quote;
+static size_t built_quote_size;
+
+//builds a playable quote from the passes recorded or played to the end since the last
+//new start and returns its size, 0 if there are none. Its replay is the recording of
+//official_size bytes JS copied into playback_buffer, or the first pass when 0.
+EXPORT size_t quote_build_data(size_t official_size)
+{
+	free(built_quote);
+	built_quote = NULL;
+	if (official_size) {
+		recording_view official;
+		if (official_size > exchange_size || !parse_recording(exchange, official_size, &official)) {
+			return 0;
+		}
+		built_quote = quote_build(exchange, official_size, official.state, official.state_size, NULL, &built_quote_size);
+	} else {
+		built_quote = quote_build(NULL, 0, NULL, 0, NULL, &built_quote_size);
+	}
+	return built_quote ? built_quote_size : 0;
+}
+
+//the quote quote_build_data built
+EXPORT uint8_t *quote_data(void)
+{
+	return built_quote;
+}
+
+EXPORT uint32_t quote_pass_count(void)
+{
+	return quote_passes();
 }
 
 //the ROM bytes the last recording or playback read, one bit per byte of the ROM file,
