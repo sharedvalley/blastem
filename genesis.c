@@ -131,6 +131,15 @@ void genesis_serialize(genesis_context *gen, serialize_buffer *buf, uint32_t m68
 		}
 
 		cart_serialize(&gen->header, buf);
+
+		if (gen->save_type != SAVE_NONE && gen->save_storage) {
+			//As SMS states do. Games read their saves, so without them a state played
+			//differently depending on what was saved since, and so did recordings.
+			start_section(buf, SECTION_CART_RAM);
+			save_int32(buf, gen->save_size);
+			save_buffer8(buf, gen->save_storage, gen->save_size);
+			end_section(buf);
+		}
 	}
 	if (gen->expansion) {
 		segacd_context *cd = gen->expansion;
@@ -170,6 +179,17 @@ static uint8_t *serialize(system_header *sys, size_t *size_out)
 		}
 		return state.data;
 	}
+}
+
+static void cart_ram_deserialize(deserialize_buffer *buf, void *vgen)
+{
+	genesis_context *gen = vgen;
+	uint32_t size = load_int32(buf);
+	if (size != gen->save_size || !gen->save_storage) {
+		warning("The state's save RAM is %u bytes but the cartridge's %u, skipping it\n", size, gen->save_size);
+		return;
+	}
+	load_buffer8(buf, gen->save_storage, size);
 }
 
 static void ram_deserialize(deserialize_buffer *buf, void *vgen)
@@ -242,6 +262,7 @@ void genesis_deserialize(deserialize_buffer *buf, genesis_context *gen)
 	register_section_handler(buf, (section_handler){.fun = bus_arbiter_deserialize, .data = gen}, SECTION_GEN_BUS_ARBITER);
 	register_section_handler(buf, (section_handler){.fun = ram_deserialize, .data = gen}, SECTION_MAIN_RAM);
 	register_section_handler(buf, (section_handler){.fun = cart_deserialize, .data = gen}, SECTION_MAPPER);
+	register_section_handler(buf, (section_handler){.fun = cart_ram_deserialize, .data = gen}, SECTION_CART_RAM);
 	if (gen->header.type == SYSTEM_GENESIS) {
 		register_section_handler(buf, (section_handler){.fun = z80_deserialize, .data = gen->z80}, SECTION_Z80);
 		register_section_handler(buf, (section_handler){.fun = io_deserialize, .data = gen->io.ports}, SECTION_SEGA_IO_1);
@@ -341,7 +362,7 @@ uint16_t read_dma_value(uint32_t address)
 
 	uint16_t value = read_word(address, (void **)genesis->m68k->mem_pointers, &genesis->m68k->opts->gen, genesis->m68k);
 	if (rom_coverage_active) {
-		rom_coverage_mark_ptr(get_native_pointer(address, (void **)genesis->m68k->mem_pointers, &genesis->m68k->opts->gen), 2, 0, COVERAGE_READ);
+		rom_coverage_mark_ptr(get_native_pointer(address, (void **)genesis->m68k->mem_pointers, &genesis->m68k->opts->gen), 2, 0, COVERAGE_READ, address);
 	}
 	return value;
 }
@@ -1808,7 +1829,7 @@ static uint8_t z80_read_bank(uint32_t location, void * vcontext)
 	location &= 0x7FFF;
 	if (context->mem_pointers[1]) {
 		if (rom_coverage_active) {
-			rom_coverage_mark_ptr(context->mem_pointers[1] + (location & ~1), 1, location & 1, COVERAGE_READ);
+			rom_coverage_mark_ptr(context->mem_pointers[1] + (location & ~1), 1, location & 1, COVERAGE_READ, gen->z80_bank_reg << 15 | location);
 		}
 		return context->mem_pointers[1][location ^ 1];
 	}
@@ -2149,11 +2170,19 @@ static void handle_reset_requests(genesis_context *gen)
 static void start_genesis(system_header *system, char *statefile)
 {
 	genesis_context *gen = (genesis_context *)system;
-	if (statefile) {
+	if (statefile || system->start_state) {
 		//first try loading as a native format savestate
 		deserialize_buffer state;
 		uint32_t pc;
-		if (load_from_file(&state, statefile)) {
+		if (system->start_state) {
+			init_deserialize(&state, system->start_state, system->start_state_size);
+			genesis_deserialize(&state, gen);
+#ifdef NEW_CORE
+			pc = gen->m68k->pc;
+#else
+			pc = gen->m68k->last_prefetch_address;
+#endif
+		} else if (load_from_file(&state, statefile)) {
 			genesis_deserialize(&state, gen);
 			free(state.data);
 #ifdef NEW_CORE
@@ -2168,7 +2197,9 @@ static void start_genesis(system_header *system, char *statefile)
 				fatal_error("Failed to load save state %s\n", statefile);
 			}
 		}
-		printf("Loaded %s\n", statefile);
+		if (statefile) {
+			printf("Loaded %s\n", statefile);
+		}
 		if (gen->header.enter_debugger) {
 			gen->header.enter_debugger = 0;
 #ifndef IS_LIB
@@ -2180,7 +2211,15 @@ static void start_genesis(system_header *system, char *statefile)
 		} else {
 			adjust_int_cycle(gen->m68k, gen->vdp);
 		}
+#ifdef NEW_CORE
+		//the state has the prefetched word, and fetching it again would take cycles a
+		//state loaded between runs doesn't, so a recording from here wouldn't replay
+		if (!system->start_state) {
+			start_68k_context(gen->m68k, pc);
+		}
+#else
 		start_68k_context(gen->m68k, pc);
+#endif
 	} else {
 		if (gen->header.enter_debugger) {
 			gen->header.enter_debugger = 0;
@@ -3004,7 +3043,11 @@ static genesis_context *shared_init_gen(rom_info info, void *lock_on, uint32_t l
 
 	gen->cart = rom;
 	gen->lock_on = lock_on;
-	rom_coverage_init(rom, rom_size, cover_rom_reads, gen);
+#ifdef BLASTEM_BIG_ENDIAN
+	rom_coverage_init(rom, rom_size, 0, cover_rom_reads, gen);
+#else
+	rom_coverage_init(rom, rom_size, 1, cover_rom_reads, gen);
+#endif
 
 	setup_io_devices(config, &info, &gen->io);
 	gen->header.has_keyboard = io_has_keyboard(&gen->io);

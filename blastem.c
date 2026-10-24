@@ -32,6 +32,7 @@
 #include "cdimage.h"
 #include "event_log.h"
 #include "input_replay.h"
+#include "quote.h"
 #ifndef DISABLE_NUKLEAR
 #include "nuklear_ui/blastem_nuklear.h"
 #endif
@@ -200,6 +201,14 @@ void browser_main_loop(void)
 			menu = 0;
 			current_system = game_system;
 		} else if (!menu) {
+			if (current_system->paused) {
+				//e.g. after leaving a playable quote, until the page plays or records from
+				//its start again
+				if (!input_replay_pending()) {
+					return;
+				}
+				current_system->paused = 0;
+			}
 			if (system_started) {
 				input_replay_run_boundary(current_system);
 				current_system->resume_context(current_system);
@@ -320,6 +329,55 @@ void lockon_media(char *lock_on_path)
 
 static uint32_t opts = 0;
 static uint8_t force_region = 0;
+#ifdef __EMSCRIPTEN__
+EM_JS(void, notify_quote_miss, (uint32_t offset, uint32_t address), {
+	if (Module.onBlastemQuoteMiss) {
+		Module.onBlastemQuoteMiss(offset, address);
+	}
+});
+#endif
+
+static void quote_missed(uint32_t offset, uint32_t address)
+{
+	printf("Left the playable quote: the game ran code at $%06X (ROM offset $%06X), which the quote doesn't keep\n", address, offset);
+	fflush(stdout);
+	if (headless) {
+		//for scripts, which can't unpause
+		exit(3);
+	}
+	current_system->paused = 1;
+#ifdef __EMSCRIPTEN__
+	notify_quote_miss(offset, address);
+	//the browser loop takes a forced release for a request to open the menu
+	system_request_exit(current_system, 0);
+#else
+	system_request_exit(current_system, 1);
+#endif
+}
+
+//A playable quote only has the ROM it needs from its start state on, so it can't boot.
+//It starts at that state instead, playing its official recording, and the game stops
+//if it leaves the quote.
+static void start_quote(system_header *system)
+{
+	if (!quote_loaded(cart.buffer)) {
+		return;
+	}
+	size_t size;
+	const uint8_t *replay = quote_replay(&size);
+	memcpy(playback_buffer(size), replay, size);
+	if (!playback_start(size)) {
+		fatal_error("The recording in this playable quote can't be played\n");
+	}
+	//a copy, as the current recording changes when another is made or loaded
+	const uint8_t *state = input_replay_start_state(&system->start_state_size);
+	system->start_state = malloc(system->start_state_size);
+	memcpy(system->start_state, state, system->start_state_size);
+	//from the first frame: a frame of live input before it could leave the quote
+	input_replay_play_started(system);
+	quote_check(quote_missed);
+}
+
 void init_system_with_media(char *path, system_type force_stype)
 {
 	if (game_system) {
@@ -365,6 +423,7 @@ void init_system_with_media(char *path, system_type force_stype)
 	game_system->next_context = menu_system;
 	setup_saves(&cart, game_system);
 	update_title(game_system->info.name);
+	start_quote(game_system);
 }
 
 void render_log_handler(log_level level, char *message)
@@ -402,7 +461,39 @@ char *parse_addr_port(char *arg)
 	return NULL;
 }
 
+//-R takes a comma separated list, played one after the other
+static char **replay_paths;
+static int num_replay_paths, next_replay;
+static char *quote_path;
+static uint8_t quote_written;
+
+static void write_quote(void)
+{
+	if (!quote_written) {
+		quote_written = 1;
+		quote_save(game_system ? game_system->info.name : NULL, quote_path);
+	}
+}
+
 static char *record_path;
+
+//plays the next recording given to -R. Once all played, it starts -W's recording, so
+//that one starts where they left the game, or writes -Q's quote and exits.
+static void play_next_recording(void)
+{
+	if (next_replay < num_replay_paths) {
+		char *path = replay_paths[next_replay++];
+		if (!input_replay_load(path)) {
+			fatal_error("Failed to load the recording %s\n", path);
+		}
+	} else if (record_path) {
+		record_start();
+	} else if (quote_path) {
+		write_quote();
+		exit(0);
+	}
+}
+
 static void save_recording(void)
 {
 	record_stop();
@@ -432,7 +523,7 @@ int main(int argc, char ** argv)
 	system_type stype = SYSTEM_UNKNOWN, force_stype = SYSTEM_UNKNOWN;
 	char * romfname = NULL;
 	char * statefile = NULL;
-	char *replay_path = NULL;
+	char *replay_list = NULL;
 	char *reader_addr = NULL, *reader_port = NULL;
 	event_reader reader = {0};
 	debugger_type dtype = DEBUGGER_NATIVE;
@@ -550,7 +641,14 @@ int main(int argc, char ** argv)
 				if (i >= argc) {
 					fatal_error("-R must be followed by a recording filename\n");
 				}
-				replay_path = argv[i];
+				replay_list = argv[i];
+				break;
+			case 'Q':
+				i++;
+				if (i >= argc) {
+					fatal_error("-Q must be followed by a filename\n");
+				}
+				quote_path = argv[i];
 				break;
 			case 'W':
 				i++;
@@ -593,8 +691,12 @@ int main(int argc, char ** argv)
 					"	-f          Toggles fullscreen mode\n"
 					"	-g          Disable OpenGL rendering\n"
 					"	-s FILE     Load a GST format savestate from FILE\n"
-					"	-R FILE     Play the input recording in FILE once the game starts\n"
-					"	-W FILE     Record inputs once the game starts and write them to FILE on exit\n"
+					"	-R FILES    Play the input recordings in FILES, separated by commas, one after\n"
+					"	            the other once the game starts\n"
+					"	-Q FILE     Write a playable quote of the recordings made or played to FILE:\n"
+					"	            once the -R recordings played, otherwise on exit\n"
+					"	-W FILE     Record inputs once the game starts, or once the -R recordings\n"
+					"	            played, and write them to FILE on exit\n"
 					"	-o FILE     Load FILE as a lock-on cartridge\n"
 					"	-d          Enter debugger on startup\n"
 					"	-n          Disable Z80\n"
@@ -720,6 +822,7 @@ int main(int argc, char ** argv)
 			menu_system = current_system;
 		} else {
 			game_system = current_system;
+			start_quote(game_system);
 		}
 	}
 
@@ -748,11 +851,22 @@ int main(int argc, char ** argv)
 
 	current_system->debugger_type = dtype;
 	current_system->enter_debugger = start_in_debugger && menu == debug_target;
-	if (replay_path && !input_replay_load(replay_path)) {
-		fatal_error("Failed to load the recording %s\n", replay_path);
+	if (replay_list) {
+		for (char *path = strtok(replay_list, ","); path; path = strtok(NULL, ","))
+		{
+			replay_paths = realloc(replay_paths, (num_replay_paths + 1) * sizeof(char *));
+			replay_paths[num_replay_paths++] = path;
+		}
+		input_replay_on_playback_end(play_next_recording);
+		play_next_recording();
+	}
+	if (quote_path) {
+		atexit(write_quote);
 	}
 	if (record_path) {
-		record_start();
+		if (!replay_list) {
+			record_start();
+		}
 		//-b ends with exit(), so the recording is written from an exit handler
 		atexit(save_recording);
 	}

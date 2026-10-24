@@ -21,7 +21,7 @@ LOCAL_SRC_FILES := $(SDL_PATH)/src/main/android/SDL_android_main.c 68kinst.c \
 	zlib/uncompr.c zlib/zutil.c nuklear_ui/font_android.c \
 	nuklear_ui/filechooser_null.c nuklear_ui/blastem_nuklear.c \
 	nuklear_ui/sfnt.c ppm.c controller_info.c png.c system.c genesis.c sms.c \
-	serialize.c saves.c hash.c xband.c zip.c bindings.c input.c jcart.c paths.c rom_coverage.c \
+	serialize.c saves.c hash.c xband.c zip.c bindings.c input.c jcart.c paths.c rom_coverage.c quote.c \
 	megawifi.c nor.c i2c.c sega_mapper.c realtec.c multi_game.c net.c coleco.c \
 	pico_pcm.c ymz263b.c segacd.c lc8951.c cdimage.c cdd_mcu.c cd_graphics.c \
 	cdd_fader.c rf5c164.c sft_mapper.c mediaplayer.c oscilloscope.c disasm.c \

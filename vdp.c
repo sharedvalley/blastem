@@ -3113,6 +3113,9 @@ static void advance_output_line(vdp_context *context)
 			//nothing is drawn, but the frontend still learns that a frame ended, e.g. to
 			//apply the input for the next one
 			render_framebuffer_updated(FRAMEBUFFER_ODD, LINEBUF_SIZE);
+			//so frames end on the same line as when drawing, and input arrives at the
+			//same time; the bottom border otherwise counted towards the next frame
+			context->pushed_frame = 1;
 		}
 		vdp_update_per_frame_debug(context);
 		context->h40_lines = 0;
@@ -6542,7 +6545,7 @@ void vdp_int_ack(vdp_context * context)
 	}
 }
 
-#define VDP_STATE_VERSION 5
+#define VDP_STATE_VERSION 6
 void vdp_serialize(vdp_context *context, serialize_buffer *buf)
 {
 	save_int8(buf, VDP_STATE_VERSION);
@@ -6629,6 +6632,9 @@ void vdp_serialize(vdp_context *context, serialize_buffer *buf)
 	save_int8(buf, context->window_v_latch);
 	save_buffer16(buf, context->test_regs + 1, 7);
 	save_int8(buf, context->selected_test_reg);
+	//where the frame being output ends, which is when the frontend applies input
+	save_int16(buf, context->output_lines);
+	save_int8(buf, context->pushed_frame);
 }
 
 void vdp_deserialize(deserialize_buffer *buf, void *vcontext)
@@ -6782,6 +6788,12 @@ void vdp_deserialize(deserialize_buffer *buf, void *vcontext)
 	} else {
 		memset(context->test_regs + 1, 0, 7 * sizeof(uint16_t));
 		context->selected_test_reg = 0;
+	}
+	if (version > 5) {
+		//without these, the first frame after loading ended on a line that depended on
+		//what the VDP did before, and a replay's input arrived at a different time
+		context->output_lines = load_int16(buf);
+		context->pushed_frame = load_int8(buf);
 	}
 	update_video_params(context);
 }

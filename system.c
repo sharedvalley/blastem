@@ -11,6 +11,7 @@
 #include "cdimage.h"
 #include "laseractive.h"
 #include "32x.h"
+#include "quote.h"
 
 #define SMD_HEADER_SIZE 512
 #define SMD_MAGIC1 0x03
@@ -293,6 +294,13 @@ uint32_t load_media(char * filename, system_media *dst, system_type *stype)
 		} while (read > 0);
 		dst->buffer = buf;
 		ret = (uint32_t)readsize;
+		uint32_t quote_rom_size = quote_unpack(&dst->buffer, ret);
+		if (quote_rom_size) {
+			ret = quote_rom_size;
+			if (stype) {
+				*stype = SYSTEM_GENESIS;
+			}
+		}
 		// Only this path still has the file open: load_smd_rom() above closes
 		// it itself, and closing it again below was a second close of the same
 		// handle for every .smd ROM. Upstream d22b34e78040.

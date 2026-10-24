@@ -18,7 +18,7 @@ static void m68k_cover_rom(m68k_context *context, uint32_t address, uint32_t siz
 	}
 	//instruction words are read with scratch1 holding pc (m68k_prefetch)
 	uint8_t fetch = size == 2 && address == (context->pc & context->opts->gen.address_mask);
-	rom_coverage_mark_ptr(word, size, size == 1 ? address & 1 : 0, fetch ? COVERAGE_FETCH : COVERAGE_READ);
+	rom_coverage_mark_ptr(word, size, size == 1 ? address & 1 : 0, fetch ? COVERAGE_FETCH : COVERAGE_READ, address);
 }
 
 static uint16_t covered_read_16(uint32_t address, void *context, void *data)
