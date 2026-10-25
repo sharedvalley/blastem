@@ -6545,7 +6545,7 @@ void vdp_int_ack(vdp_context * context)
 	}
 }
 
-#define VDP_STATE_VERSION 6
+#define VDP_STATE_VERSION 7
 void vdp_serialize(vdp_context *context, serialize_buffer *buf)
 {
 	save_int8(buf, VDP_STATE_VERSION);
@@ -6635,6 +6635,8 @@ void vdp_serialize(vdp_context *context, serialize_buffer *buf)
 	//where the frame being output ends, which is when the frontend applies input
 	save_int16(buf, context->output_lines);
 	save_int8(buf, context->pushed_frame);
+	//the line count to the next HINT, which a load would otherwise keep from before it
+	save_int8(buf, context->hint_counter);
 }
 
 void vdp_deserialize(deserialize_buffer *buf, void *vcontext)
@@ -6794,6 +6796,16 @@ void vdp_deserialize(deserialize_buffer *buf, void *vcontext)
 		//what the VDP did before, and a replay's input arrived at a different time
 		context->output_lines = load_int16(buf);
 		context->pushed_frame = load_int8(buf);
+	}
+	if (version > 6) {
+		context->hint_counter = load_int8(buf);
+	} else if (context->state == ACTIVE) {
+		//Older states lack the counter, and keeping the one from before the load could fire
+		//an HINT the game never had. It reloads from REG_HINT at the start of the frame and
+		//on each HINT, and counts down once a line.
+		context->hint_counter = context->regs[REG_HINT] - context->vcounter % (context->regs[REG_HINT] + 1);
+	} else {
+		context->hint_counter = context->regs[REG_HINT];
 	}
 	update_video_params(context);
 }
