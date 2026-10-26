@@ -13,8 +13,8 @@ permissions:
 
 env:
   EMSDK_VERSION: 6.0.13
-  WRANGLER_VERSION: 4.151.3
   R2_BUCKET: blastem-builds
+  R2_ENDPOINT: https://e200dc7bdd387bbe00c8829f4bf0cd9d.r2.cloudflarestorage.com
   CDN_URL: https://cdn.sharedvalley.com
 
 jobs:
@@ -72,13 +72,18 @@ jobs:
       - name: Publish to the CDN
         if: github.ref_type == 'tag'
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_BLASTEM_API_TOKEN_VALUE }}
-          CLOUDFLARE_ACCOUNT_ID: e200dc7bdd387bbe00c8829f4bf0cd9d
+          # A bucket-scoped R2 token: those only work with the S3 API
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          # R2 rejects the checksums newer AWS CLIs send by default
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
         run: |
           gzip -9 -n -k blastem.wasm
           put() {
-            npx --yes "wrangler@$WRANGLER_VERSION" r2 object put "$R2_BUCKET/blastem/$1" --remote \
-              --file "$2" --content-type "$3" --cache-control "$4"
+            aws s3api put-object --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" --key "blastem/$1" \
+              --body "$2" --content-type "$3" --cache-control "$4" >/dev/null
           }
           immutable="public, max-age=31536000, immutable"
           put "$VERSION/blastem.js" blastem.js application/javascript "$immutable"
