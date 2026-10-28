@@ -433,7 +433,7 @@ static void start_recording(uint8_t *state, size_t state_size)
 static void begin_playback(system_header *system)
 {
 	//the loaded state has the recording's pads down, not the ones applied before
-	input_reset_applied(&view.initial);
+	input_reset_applied(system, &view.initial);
 	quote_rearm();
 	play_system = system;
 	play_state = view.initial;
@@ -469,7 +469,7 @@ void input_replay_run_boundary(system_header *system)
 		start_recording(state, size);
 	} else if (pending == PENDING_PASS) {
 		system->deserialize(system, view.state, view.state_size);
-		input_reset_applied(&view.initial);
+		input_reset_applied(system, &view.initial);
 		quote_rearm();
 		//the state itself rather than serializing it again, which isn't exactly the same
 		uint8_t *state = malloc(view.state_size);
