@@ -76,11 +76,6 @@ const pad_state *input_applied(void)
 	return &applied;
 }
 
-void input_reset_applied(const pad_state *state)
-{
-	applied = *state;
-}
-
 static void apply_bits(system_header *system, uint8_t pad, uint16_t old, uint16_t new)
 {
 	uint16_t changed = old ^ new;
@@ -97,6 +92,19 @@ static void apply_bits(system_header *system, uint8_t pad, uint16_t old, uint16_
 			system->gamepad_up(system, pad, button);
 		}
 	}
+}
+
+void input_reset_applied(system_header *system, const pad_state *state)
+{
+	//save states don't keep which buttons are down, so the system can still have the ones
+	//held before the state was loaded: release every button state doesn't have down
+	uint16_t buttons = ((1 << NUM_GAMEPAD_BUTTONS) - 1) & ~(1 << BUTTON_INVALID);
+	for (uint8_t i = 0; i < INPUT_MAX_PADS; i++)
+	{
+		apply_bits(system, i + 1, ~state->pads[i] & buttons, state->pads[i]);
+	}
+	applied = *state;
+	applied_system = system;
 }
 
 void input_frame(system_header *system)

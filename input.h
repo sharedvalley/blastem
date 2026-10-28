@@ -35,8 +35,9 @@ void input_add_tap(input_tap_fun fun, void *data);
 void input_remove_tap(input_tap_fun fun, void *data);
 //the state the system currently has
 const pad_state *input_applied(void);
-//tells the input code the system's state changed under it, e.g. when a save state is loaded
-void input_reset_applied(const pad_state *state);
+//puts the system's buttons in state after its state changed under the input code, e.g.
+//when a save state is loaded
+void input_reset_applied(system_header *system, const pad_state *state);
 //called once per emulated frame, at its end
 void input_frame(system_header *system);
 
