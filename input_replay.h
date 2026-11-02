@@ -22,7 +22,8 @@ uint8_t input_replay_load(const char *path);
 //makes its official recording the current one, so passes from here improve on it;
 //returns 0 unless quote is a quote of this ROM
 uint8_t input_replay_seed(const uint8_t *quote, size_t size);
-//the same with a quote from a file, as quote_save writes it or the website uploads it
+//the same with a quote from a file, as quote_save writes it, also read gzipped and after
+//a "BLREC1" line and a JSON header line
 uint8_t input_replay_seed_file(const char *path);
 //the start state of the current recording, NULL without one
 const uint8_t *input_replay_start_state(size_t *size);

@@ -331,17 +331,17 @@ void lockon_media(char *lock_on_path)
 static uint32_t opts = 0;
 static uint8_t force_region = 0;
 #ifdef __EMSCRIPTEN__
-EM_JS(void, notify_quote_miss, (uint32_t offset, uint32_t address, uint8_t kind), {
+EM_JS(void, notify_quote_miss, (uint32_t offset, uint32_t address, uint8_t miss_type), {
 	if (Module.onBlastemQuoteMiss) {
-		Module.onBlastemQuoteMiss(offset, address, kind);
+		Module.onBlastemQuoteMiss(offset, address, miss_type);
 	}
 });
 #endif
 
-static void quote_missed(uint32_t offset, uint32_t address, uint8_t kind)
+static void quote_missed(uint32_t offset, uint32_t address, uint8_t miss_type)
 {
-	printf("Left the playable quote: the game %s $%06X (ROM offset $%06X), which the quote doesn't keep\n",
-		kind == COVERAGE_FETCH ? "ran code at" : "read data at", address, offset);
+	printf("The game needs a part of the ROM this playable quote doesn't keep: it %s $%06X (ROM offset $%06X)\n",
+		miss_type == COVERAGE_FETCH ? "ran code at" : "read data at", address, offset);
 	fflush(stdout);
 	if (headless) {
 		//for scripts, which can't unpause
@@ -349,7 +349,7 @@ static void quote_missed(uint32_t offset, uint32_t address, uint8_t kind)
 	}
 	current_system->paused = 1;
 #ifdef __EMSCRIPTEN__
-	notify_quote_miss(offset, address, kind);
+	notify_quote_miss(offset, address, miss_type);
 	//the browser loop takes a forced release for a request to open the menu
 	system_request_exit(current_system, 0);
 #else
@@ -864,7 +864,8 @@ int main(int argc, char ** argv)
 	current_system->debugger_type = dtype;
 	current_system->enter_debugger = start_in_debugger && menu == debug_target;
 	if (seed_path && !input_replay_seed_file(seed_path)) {
-		fatal_error("%s isn't a playable quote of this ROM\n", seed_path);
+		//the warnings before this say why
+		fatal_error("Couldn't start the passes from the playable quote in %s\n", seed_path);
 	}
 	if (replay_list) {
 		for (char *path = strtok(replay_list, ","); path; path = strtok(NULL, ","))

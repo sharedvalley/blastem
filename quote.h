@@ -43,9 +43,9 @@ uint8_t *quote_seed_kept(const uint8_t *data, size_t size, const uint8_t **repla
 //what the passes so far read, one bit per byte of the ROM file, NULL without passes
 const uint8_t *quote_union(void);
 
-//called the first time the system reads a byte the loaded quote left out, kind is
+//called the first time the system reads a byte the loaded quote left out, miss_type is
 //COVERAGE_FETCH for an instruction and COVERAGE_READ for data
-typedef void (*quote_miss_handler)(uint32_t rom_offset, uint32_t address, uint8_t kind);
+typedef void (*quote_miss_handler)(uint32_t rom_offset, uint32_t address, uint8_t miss_type);
 //checks the system's reads against the loaded quote from now on
 void quote_check(quote_miss_handler handler);
 //the system is back at a state in the quote, so a later miss is reported again

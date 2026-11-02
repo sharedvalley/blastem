@@ -129,8 +129,9 @@ uint32_t quote_kept_bytes(uint32_t *rom_size)
 	return count;
 }
 
-//the loaded ROM in file order, for its hash and the kept bytes, and its SHA-1 in hex
-static uint8_t *loaded_rom_bytes(char *sha1_hex)
+//Copies the loaded ROM as its file has it. The system reads it from a buffer that can
+//have the bytes of each word swapped. The caller frees the copy.
+static uint8_t *copy_loaded_rom(void)
 {
 	uint32_t rom_size = rom_coverage_rom_size();
 	uint8_t *rom = malloc(rom_size ? rom_size : 1);
@@ -138,10 +139,15 @@ static uint8_t *loaded_rom_bytes(char *sha1_hex)
 	{
 		rom[offset] = rom_coverage_rom_byte(offset);
 	}
-	uint8_t raw_sha1[20];
-	sha1(rom, rom_size, raw_sha1);
-	bin_to_hex((uint8_t *)sha1_hex, raw_sha1, 20);
 	return rom;
+}
+
+//Writes the SHA-1 of size bytes of data to hex, as 40 hex digits and a terminator.
+static void sha1_hex(const uint8_t *data, uint32_t size, char *hex)
+{
+	uint8_t raw[20];
+	sha1((uint8_t *)data, size, raw);
+	bin_to_hex((uint8_t *)hex, raw, 20);
 }
 
 typedef struct {
@@ -192,8 +198,9 @@ uint8_t *quote_build(const uint8_t *official, size_t official_size, const uint8_
 		//the passes' reads only cover what can happen from their start
 		return NULL;
 	}
-	char sha1_hex[41];
-	uint8_t *rom = loaded_rom_bytes(sha1_hex);
+	char rom_sha1[41];
+	uint8_t *rom = copy_loaded_rom();
+	sha1_hex(rom, union_rom_size, rom_sha1);
 	uint8_t *kept = kept_bitmap();
 	uint32_t kept_bytes = 0;
 	for (uint32_t offset = 0; offset < union_rom_size; offset++)
@@ -207,7 +214,7 @@ uint8_t *quote_build(const uint8_t *official, size_t official_size, const uint8_
 
 	char meta[512];
 	snprintf(meta, sizeof(meta), "rom_sha1=%s\nrom_size=%u\nname=%s\npasses=%u\nkept=%u\n",
-		sha1_hex, union_rom_size, name ? name : "", num_passes, kept_bytes);
+		rom_sha1, union_rom_size, name ? name : "", num_passes, kept_bytes);
 	size_t chunk = start_chunk(&out, "META");
 	append(&out, meta, strlen(meta));
 	end_chunk(&out, chunk);
@@ -420,30 +427,45 @@ const char *quote_rom_sha1(const uint8_t *rom)
 uint8_t *quote_seed_kept(const uint8_t *data, size_t size, const uint8_t **replay, size_t *replay_size)
 {
 	uint32_t rom_size = rom_coverage_rom_size();
-	quote_file q;
-	if (!rom_size || loaded_rom || !parse_quote(data, size, &q)) {
+	if (!rom_size || loaded_rom) {
+		warning("A playable quote can only be improved on the whole ROM it was cut from\n");
 		return NULL;
 	}
-	char sha1_hex[41];
-	uint8_t *rom = loaded_rom_bytes(sha1_hex);
+	if (size < 4 || memcmp(data, QUOTE_MAGIC, 4)) {
+		warning("This file isn't a playable quote\n");
+		return NULL;
+	}
+	quote_file q;
+	if (!parse_quote(data, size, &q)) {
+		return NULL;
+	}
+	char rom_sha1[41];
+	uint8_t *rom = copy_loaded_rom();
+	sha1_hex(rom, rom_size, rom_sha1);
+	if (q.rom_size != rom_size || strcmp(rom_sha1, q.sha1)) {
+		warning("This playable quote was cut from a ROM of %u bytes with SHA-1 %s, not the one loaded, of %u bytes with SHA-1 %s\n",
+			q.rom_size, q.sha1, rom_size, rom_sha1);
+		free(rom);
+		return NULL;
+	}
 	uint8_t *kept = calloc((rom_size + 7) / 8, 1);
-	uint8_t same = q.rom_size == rom_size && !strcmp(sha1_hex, q.sha1);
 	const uint8_t *cur = q.ranges, *bytes;
 	uint32_t offset, length;
-	while (same && next_range(&q, &cur, &offset, &length, &bytes))
+	while (next_range(&q, &cur, &offset, &length, &bytes))
 	{
-		same = !memcmp(rom + offset, bytes, length);
+		if (memcmp(rom + offset, bytes, length)) {
+			//the SHA-1 matches, so the quote itself was changed
+			warning("This playable quote's bytes at ROM offset $%06X differ from the ROM it names by its SHA-1\n", offset);
+			free(rom);
+			free(kept);
+			return NULL;
+		}
 		for (uint32_t i = offset; i < offset + length; i++)
 		{
 			set_bit(kept, i);
 		}
 	}
 	free(rom);
-	if (!same) {
-		warning("This playable quote was cut from another ROM\n");
-		free(kept);
-		return NULL;
-	}
 	*replay = q.replay;
 	*replay_size = q.replay_size;
 	return kept;
@@ -454,14 +476,14 @@ const uint8_t *quote_union(void)
 	return num_passes ? union_read : NULL;
 }
 
-static void report_miss(uint32_t offset, uint32_t address, uint8_t kind)
+static void report_miss(uint32_t offset, uint32_t address, uint8_t miss_type)
 {
 	if (missed) {
 		return;
 	}
 	missed = 1;
 	if (miss_handler) {
-		miss_handler(offset, address, kind);
+		miss_handler(offset, address, miss_type);
 	}
 }
 

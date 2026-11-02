@@ -622,9 +622,7 @@ uint8_t input_replay_seed(const uint8_t *quote, size_t size)
 	return 1;
 }
 
-//adds the quote of size bytes JS copied into playback_buffer as a pass that read what it
-//keeps, and makes its official recording the current one, so passes recorded from here
-//start where it does. Returns 0 unless it's a quote of this ROM.
+//input_replay_seed with the quote of size bytes in playback_buffer
 EXPORT uint8_t quote_seed_data(size_t size)
 {
 	return size <= exchange_size && input_replay_seed(exchange, size);
@@ -746,9 +744,10 @@ uint8_t input_replay_save(const char *path)
 //gzip("BLREC1\n" + JSON header + "\n" + recording), the website's format
 #define WEB_MAGIC "BLREC1\n"
 
-//reads a file as input_replay_save or quote_save write it, or as the website uploads it,
-//and returns the buffer to free, with what it holds at *start, or NULL if it can't
-static uint8_t *read_upload(const char *path, uint8_t **start, size_t *start_size)
+//Reads a file input_replay_save or quote_save wrote, gzipped or not, and maybe after a
+//"BLREC1" line and a JSON header line. Returns the buffer to free, with the recording or
+//quote at *start, or NULL if it can't be read.
+static uint8_t *read_saved(const char *path, uint8_t **start, size_t *start_size)
 {
 	//gzread reads files that aren't compressed as they are
 	gzFile f = gzopen(path, "rb");
@@ -785,7 +784,7 @@ uint8_t input_replay_load(const char *path)
 {
 	uint8_t *start;
 	size_t size;
-	uint8_t *data = read_upload(path, &start, &size);
+	uint8_t *data = read_saved(path, &start, &size);
 	if (!data) {
 		return 0;
 	}
@@ -798,8 +797,9 @@ uint8_t input_replay_seed_file(const char *path)
 {
 	uint8_t *start;
 	size_t size;
-	uint8_t *data = read_upload(path, &start, &size);
+	uint8_t *data = read_saved(path, &start, &size);
 	if (!data) {
+		warning("Couldn't read %s\n", path);
 		return 0;
 	}
 	uint8_t seeded = input_replay_seed(start, size);
