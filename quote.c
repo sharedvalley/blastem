@@ -129,6 +129,21 @@ uint32_t quote_kept_bytes(uint32_t *rom_size)
 	return count;
 }
 
+//the loaded ROM in file order, for its hash and the kept bytes, and its SHA-1 in hex
+static uint8_t *loaded_rom_bytes(char *sha1_hex)
+{
+	uint32_t rom_size = rom_coverage_rom_size();
+	uint8_t *rom = malloc(rom_size ? rom_size : 1);
+	for (uint32_t offset = 0; offset < rom_size; offset++)
+	{
+		rom[offset] = rom_coverage_rom_byte(offset);
+	}
+	uint8_t raw_sha1[20];
+	sha1(rom, rom_size, raw_sha1);
+	bin_to_hex((uint8_t *)sha1_hex, raw_sha1, 20);
+	return rom;
+}
+
 typedef struct {
 	uint8_t *data;
 	size_t  size, storage;
@@ -177,15 +192,8 @@ uint8_t *quote_build(const uint8_t *official, size_t official_size, const uint8_
 		//the passes' reads only cover what can happen from their start
 		return NULL;
 	}
-	//the ROM in file order, for its hash and the kept bytes
-	uint8_t *rom = malloc(union_rom_size);
-	for (uint32_t offset = 0; offset < union_rom_size; offset++)
-	{
-		rom[offset] = rom_coverage_rom_byte(offset);
-	}
-	uint8_t raw_sha1[20], sha1_hex[41];
-	sha1(rom, union_rom_size, raw_sha1);
-	bin_to_hex(sha1_hex, raw_sha1, 20);
+	char sha1_hex[41];
+	uint8_t *rom = loaded_rom_bytes(sha1_hex);
 	uint8_t *kept = kept_bitmap();
 	uint32_t kept_bytes = 0;
 	for (uint32_t offset = 0; offset < union_rom_size; offset++)
@@ -199,7 +207,7 @@ uint8_t *quote_build(const uint8_t *official, size_t official_size, const uint8_
 
 	char meta[512];
 	snprintf(meta, sizeof(meta), "rom_sha1=%s\nrom_size=%u\nname=%s\npasses=%u\nkept=%u\n",
-		(char *)sha1_hex, union_rom_size, name ? name : "", num_passes, kept_bytes);
+		sha1_hex, union_rom_size, name ? name : "", num_passes, kept_bytes);
 	size_t chunk = start_chunk(&out, "META");
 	append(&out, meta, strlen(meta));
 	end_chunk(&out, chunk);
@@ -286,18 +294,25 @@ static uint8_t meta_value(const uint8_t *meta, uint32_t size, const char *key, c
 	return 0;
 }
 
-uint32_t quote_unpack(void **vbuffer, uint32_t size)
+typedef struct {
+	const uint8_t *ranges, *replay;
+	uint32_t      ranges_size, replay_size, rom_size;
+	char          sha1[41];
+} quote_file;
+
+//finds the chunks of a quote and checks its ranges fit the ROM it was cut from
+static uint8_t parse_quote(const uint8_t *data, size_t size, quote_file *out)
 {
-	uint8_t *data = *vbuffer;
-	if (size < 8 || memcmp(data, QUOTE_MAGIC, 4)) {
+	if (size < 8 || size > UINT32_MAX || memcmp(data, QUOTE_MAGIC, 4)) {
 		return 0;
 	}
 	if (read32(data + 4) != QUOTE_VERSION) {
 		warning("This playable quote is from a newer version of BlastEm\n");
 		return 0;
 	}
-	const uint8_t *meta = NULL, *ranges = NULL, *replay = NULL;
-	uint32_t meta_size = 0, ranges_size = 0, replay_size = 0;
+	const uint8_t *meta = NULL;
+	uint32_t meta_size = 0;
+	out->ranges = out->replay = NULL;
 	for (const uint8_t *cur = data + 8, *end = data + size; cur < end;)
 	{
 		if (end - cur < 8 || read32(cur + 4) > end - cur - 8) {
@@ -309,55 +324,81 @@ uint32_t quote_unpack(void **vbuffer, uint32_t size)
 			meta = cur + 8;
 			meta_size = chunk_size;
 		} else if (!memcmp(cur, "ROMS", 4)) {
-			ranges = cur + 8;
-			ranges_size = chunk_size;
+			out->ranges = cur + 8;
+			out->ranges_size = chunk_size;
 		} else if (!memcmp(cur, "RPLY", 4)) {
-			replay = cur + 8;
-			replay_size = chunk_size;
+			out->replay = cur + 8;
+			out->replay_size = chunk_size;
 		}
 		cur += 8 + chunk_size;
 	}
-	char sha1_hex[41], rom_size_text[16];
-	if (!meta || !ranges || !replay || !meta_value(meta, meta_size, "rom_sha1", sha1_hex, sizeof(sha1_hex))
-		|| strlen(sha1_hex) != 40 || !meta_value(meta, meta_size, "rom_size", rom_size_text, sizeof(rom_size_text))) {
+	char rom_size_text[16];
+	if (!meta || !out->ranges || !out->replay || !meta_value(meta, meta_size, "rom_sha1", out->sha1, sizeof(out->sha1))
+		|| strlen(out->sha1) != 40 || !meta_value(meta, meta_size, "rom_size", rom_size_text, sizeof(rom_size_text))) {
 		warning("This playable quote is missing parts\n");
 		return 0;
 	}
-	uint32_t rom_size = strtoul(rom_size_text, NULL, 10);
-	if (!rom_size) {
+	out->rom_size = strtoul(rom_size_text, NULL, 10);
+	if (!out->rom_size) {
+		return 0;
+	}
+	for (const uint8_t *cur = out->ranges, *end = out->ranges + out->ranges_size; cur < end;)
+	{
+		uint32_t offset, length;
+		if (end - cur < 8 || (offset = read32(cur)) > out->rom_size || (length = read32(cur + 4)) > out->rom_size - offset
+			|| length > end - cur - 8) {
+			warning("This playable quote is damaged\n");
+			return 0;
+		}
+		cur += 8 + length;
+	}
+	return 1;
+}
+
+//the range at *cur of a parsed quote's ROMS, moving *cur to the next; 0 past the last
+static uint8_t next_range(const quote_file *q, const uint8_t **cur, uint32_t *offset, uint32_t *length, const uint8_t **bytes)
+{
+	if (*cur >= q->ranges + q->ranges_size) {
+		return 0;
+	}
+	*offset = read32(*cur);
+	*length = read32(*cur + 4);
+	*bytes = *cur + 8;
+	*cur += 8 + *length;
+	return 1;
+}
+
+uint32_t quote_unpack(void **vbuffer, uint32_t size)
+{
+	uint8_t *data = *vbuffer;
+	quote_file q;
+	if (!parse_quote(data, size, &q)) {
 		return 0;
 	}
 	//load_media's buffers are padded to a power of two, which byteswapping relies on
-	uint8_t *rom = aligned_calloc(1, nearest_pow2(rom_size), 16);
-	uint8_t *valid = calloc((rom_size + 7) / 8, 1);
-	for (const uint8_t *cur = ranges, *end = ranges + ranges_size; cur < end;)
+	uint8_t *rom = aligned_calloc(1, nearest_pow2(q.rom_size), 16);
+	uint8_t *valid = calloc((q.rom_size + 7) / 8, 1);
+	const uint8_t *cur = q.ranges, *bytes;
+	uint32_t offset, length;
+	while (next_range(&q, &cur, &offset, &length, &bytes))
 	{
-		uint32_t offset, length;
-		if (end - cur < 8 || (offset = read32(cur)) > rom_size || (length = read32(cur + 4)) > rom_size - offset
-			|| length > end - cur - 8) {
-			warning("This playable quote is damaged\n");
-			aligned_free(rom);
-			free(valid);
-			return 0;
-		}
-		memcpy(rom + offset, cur + 8, length);
+		memcpy(rom + offset, bytes, length);
 		for (uint32_t i = offset; i < offset + length; i++)
 		{
 			set_bit(valid, i);
 		}
-		cur += 8 + length;
 	}
 	free(loaded_valid);
 	free(loaded_replay);
 	loaded_rom = rom;
 	loaded_valid = valid;
-	memcpy(loaded_sha1, sha1_hex, sizeof(loaded_sha1));
-	loaded_replay = malloc(replay_size);
-	memcpy(loaded_replay, replay, replay_size);
-	loaded_replay_size = replay_size;
+	memcpy(loaded_sha1, q.sha1, sizeof(loaded_sha1));
+	loaded_replay = malloc(q.replay_size);
+	memcpy(loaded_replay, q.replay, q.replay_size);
+	loaded_replay_size = q.replay_size;
 	aligned_free(data);
 	*vbuffer = rom;
-	return rom_size;
+	return q.rom_size;
 }
 
 uint8_t quote_loaded(const void *rom)
@@ -376,14 +417,51 @@ const char *quote_rom_sha1(const uint8_t *rom)
 	return rom && rom == loaded_rom ? loaded_sha1 : NULL;
 }
 
-static void report_miss(uint32_t offset, uint32_t address)
+uint8_t *quote_seed_kept(const uint8_t *data, size_t size, const uint8_t **replay, size_t *replay_size)
+{
+	uint32_t rom_size = rom_coverage_rom_size();
+	quote_file q;
+	if (!rom_size || loaded_rom || !parse_quote(data, size, &q)) {
+		return NULL;
+	}
+	char sha1_hex[41];
+	uint8_t *rom = loaded_rom_bytes(sha1_hex);
+	uint8_t *kept = calloc((rom_size + 7) / 8, 1);
+	uint8_t same = q.rom_size == rom_size && !strcmp(sha1_hex, q.sha1);
+	const uint8_t *cur = q.ranges, *bytes;
+	uint32_t offset, length;
+	while (same && next_range(&q, &cur, &offset, &length, &bytes))
+	{
+		same = !memcmp(rom + offset, bytes, length);
+		for (uint32_t i = offset; i < offset + length; i++)
+		{
+			set_bit(kept, i);
+		}
+	}
+	free(rom);
+	if (!same) {
+		warning("This playable quote was cut from another ROM\n");
+		free(kept);
+		return NULL;
+	}
+	*replay = q.replay;
+	*replay_size = q.replay_size;
+	return kept;
+}
+
+const uint8_t *quote_union(void)
+{
+	return num_passes ? union_read : NULL;
+}
+
+static void report_miss(uint32_t offset, uint32_t address, uint8_t kind)
 {
 	if (missed) {
 		return;
 	}
 	missed = 1;
 	if (miss_handler) {
-		miss_handler(offset, address);
+		miss_handler(offset, address, kind);
 	}
 }
 

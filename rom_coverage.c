@@ -13,7 +13,6 @@ static uint8_t *bitmaps[COVERAGE_KINDS];
 static uint8_t marking;
 static const uint8_t *valid;
 static rom_coverage_miss miss;
-static uint32_t data_misses;
 
 static size_t bitmap_size(void)
 {
@@ -75,13 +74,7 @@ void rom_coverage_check(const uint8_t *new_valid, rom_coverage_miss new_miss)
 {
 	valid = rom ? new_valid : NULL;
 	miss = new_miss;
-	data_misses = 0;
 	update_active();
-}
-
-uint32_t rom_coverage_data_misses(void)
-{
-	return data_misses;
 }
 
 void rom_coverage_mark_ptr(const void *ptr, uint32_t size, uint8_t byte_in_word, uint8_t kind, uint32_t address)
@@ -101,13 +94,10 @@ void rom_coverage_mark_ptr(const void *ptr, uint32_t size, uint8_t byte_in_word,
 			}
 		}
 		if (valid && !bit(valid, offset)) {
-			if (kind == COVERAGE_FETCH) {
-				if (miss) {
-					miss(offset, address);
-				}
-				return;
+			if (miss) {
+				miss(offset, address, kind);
 			}
-			data_misses++;
+			return;
 		}
 	}
 }

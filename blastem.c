@@ -33,6 +33,7 @@
 #include "event_log.h"
 #include "input_replay.h"
 #include "quote.h"
+#include "rom_coverage.h"
 #ifndef DISABLE_NUKLEAR
 #include "nuklear_ui/blastem_nuklear.h"
 #endif
@@ -330,16 +331,17 @@ void lockon_media(char *lock_on_path)
 static uint32_t opts = 0;
 static uint8_t force_region = 0;
 #ifdef __EMSCRIPTEN__
-EM_JS(void, notify_quote_miss, (uint32_t offset, uint32_t address), {
+EM_JS(void, notify_quote_miss, (uint32_t offset, uint32_t address, uint8_t kind), {
 	if (Module.onBlastemQuoteMiss) {
-		Module.onBlastemQuoteMiss(offset, address);
+		Module.onBlastemQuoteMiss(offset, address, kind);
 	}
 });
 #endif
 
-static void quote_missed(uint32_t offset, uint32_t address)
+static void quote_missed(uint32_t offset, uint32_t address, uint8_t kind)
 {
-	printf("Left the playable quote: the game ran code at $%06X (ROM offset $%06X), which the quote doesn't keep\n", address, offset);
+	printf("Left the playable quote: the game %s $%06X (ROM offset $%06X), which the quote doesn't keep\n",
+		kind == COVERAGE_FETCH ? "ran code at" : "read data at", address, offset);
 	fflush(stdout);
 	if (headless) {
 		//for scripts, which can't unpause
@@ -347,7 +349,7 @@ static void quote_missed(uint32_t offset, uint32_t address)
 	}
 	current_system->paused = 1;
 #ifdef __EMSCRIPTEN__
-	notify_quote_miss(offset, address);
+	notify_quote_miss(offset, address, kind);
 	//the browser loop takes a forced release for a request to open the menu
 	system_request_exit(current_system, 0);
 #else
@@ -465,6 +467,7 @@ char *parse_addr_port(char *arg)
 static char **replay_paths;
 static int num_replay_paths, next_replay;
 static char *quote_path;
+static char *seed_path;
 static uint8_t quote_written;
 
 static void write_quote(void)
@@ -650,6 +653,13 @@ int main(int argc, char ** argv)
 				}
 				quote_path = argv[i];
 				break;
+			case 'E':
+				i++;
+				if (i >= argc) {
+					fatal_error("-E must be followed by a playable quote filename\n");
+				}
+				seed_path = argv[i];
+				break;
 			case 'W':
 				i++;
 				if (i >= argc) {
@@ -695,6 +705,8 @@ int main(int argc, char ** argv)
 					"	            the other once the game starts\n"
 					"	-Q FILE     Write a playable quote of the recordings made or played to FILE:\n"
 					"	            once the -R recordings played, otherwise on exit\n"
+					"	-E FILE     Start the passes for -Q from the playable quote in FILE, cut from\n"
+					"	            this ROM, so -R recordings from its start improve on it\n"
 					"	-W FILE     Record inputs once the game starts, or once the -R recordings\n"
 					"	            played, and write them to FILE on exit\n"
 					"	-o FILE     Load FILE as a lock-on cartridge\n"
@@ -851,6 +863,9 @@ int main(int argc, char ** argv)
 
 	current_system->debugger_type = dtype;
 	current_system->enter_debugger = start_in_debugger && menu == debug_target;
+	if (seed_path && !input_replay_seed_file(seed_path)) {
+		fatal_error("%s isn't a playable quote of this ROM\n", seed_path);
+	}
 	if (replay_list) {
 		for (char *path = strtok(replay_list, ","); path; path = strtok(NULL, ","))
 		{

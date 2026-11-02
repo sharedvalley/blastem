@@ -18,6 +18,12 @@ uint8_t input_replay_save(const char *path);
 //plays a recording from a file, as written by input_replay_save or a .blrec from the
 //website, returns 0 if it can't be read
 uint8_t input_replay_load(const char *path);
+//adds a playable quote of the ROM loaded as a pass, which read what the quote keeps, and
+//makes its official recording the current one, so passes from here improve on it;
+//returns 0 unless quote is a quote of this ROM
+uint8_t input_replay_seed(const uint8_t *quote, size_t size);
+//the same with a quote from a file, as quote_save writes it or the website uploads it
+uint8_t input_replay_seed_file(const char *path);
 //the start state of the current recording, NULL without one
 const uint8_t *input_replay_start_state(size_t *size);
 //plays the current recording from the system's first frame, for a system that starts
@@ -44,5 +50,8 @@ uint32_t record_status(void);
 size_t quote_build_data(size_t official_size);
 uint8_t *quote_data(void);
 uint32_t quote_pass_count(void);
+uint8_t quote_seed_data(size_t size);
+const uint8_t *quote_union_data(void);
+void playback_takeover(uint8_t on);
 
 #endif //INPUT_REPLAY_H_

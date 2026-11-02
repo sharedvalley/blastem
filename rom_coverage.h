@@ -20,9 +20,9 @@ extern uint8_t rom_coverage_active;
 //called when marking or checking starts and stops, for the system to route its CPU
 //reads here
 typedef void (*rom_coverage_toggle)(void *data, uint8_t enable);
-//called when an instruction is fetched from a byte the quote left out, with the ROM
-//offset and the CPU address it was fetched from
-typedef void (*rom_coverage_miss)(uint32_t offset, uint32_t address);
+//called when a byte the quote left out is read, with the ROM offset, the CPU address
+//read and the kind of read. It reads 0, so the system shouldn't run on after it.
+typedef void (*rom_coverage_miss)(uint32_t offset, uint32_t address, uint8_t kind);
 
 //rom is the buffer the system reads the cartridge from, size the size of the ROM file
 //and byteswapped whether the buffer holds it with the bytes of each 16-bit word
@@ -33,8 +33,6 @@ void rom_coverage_start(void);
 void rom_coverage_stop(void);
 //checks reads against valid, one bit per byte of the ROM file, until called with NULL
 void rom_coverage_check(const uint8_t *valid, rom_coverage_miss miss);
-//data reads of bytes left out since checking started; they read 0
-uint32_t rom_coverage_data_misses(void);
 //marks or checks size bytes read through a host pointer, if it points into the ROM
 //buffer. ptr must be the start of a 16-bit word, so byte_in_word picks the byte of a
 //1-byte read. address is the CPU address read, for reporting a miss.
