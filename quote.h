@@ -36,9 +36,16 @@ uint8_t quote_loaded(const void *rom);
 const uint8_t *quote_replay(size_t *size);
 //the SHA-1 of the original ROM, in hex, when rom is the loaded quote's
 const char *quote_rom_sha1(const uint8_t *rom);
+//when data is a quote of the ROM loaded, the bytes it keeps, one bit per byte of the ROM
+//file, in a buffer the caller frees, and its official recording in replay; NULL when it
+//isn't one, or was cut from another ROM
+uint8_t *quote_seed_kept(const uint8_t *data, size_t size, const uint8_t **replay, size_t *replay_size);
+//what the passes so far read, one bit per byte of the ROM file, NULL without passes
+const uint8_t *quote_union(void);
 
-//called the first time the system fetches an instruction the loaded quote left out
-typedef void (*quote_miss_handler)(uint32_t rom_offset, uint32_t address);
+//called the first time the system reads a byte the loaded quote left out, miss_type is
+//COVERAGE_FETCH for an instruction and COVERAGE_READ for data
+typedef void (*quote_miss_handler)(uint32_t rom_offset, uint32_t address, uint8_t miss_type);
 //checks the system's reads against the loaded quote from now on
 void quote_check(quote_miss_handler handler);
 //the system is back at a state in the quote, so a later miss is reported again

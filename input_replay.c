@@ -83,6 +83,8 @@ static system_header *play_system;
 static pad_state play_state;
 static uint32_t play_frame, play_next_event;
 static uint8_t reported_desync;
+//a playback that reaches its end goes on as a recording
+static uint8_t takeover;
 
 //recordings coming from JS
 static uint8_t *exchange;
@@ -259,10 +261,41 @@ static void verify_tap(void *data, system_header *system, const pad_state *appli
 	}
 }
 
+//the playback that just reached its end becomes a recording from the same start that
+//goes on from here, so it makes one pass with what the playback read
+static void take_over(void)
+{
+	free(rec_state);
+	rec_state = malloc(view.state_size);
+	memcpy(rec_state, view.state, view.state_size);
+	rec_state_size = view.state_size;
+	rec_initial = view.initial;
+	rec_last = play_state;
+	rec_num_events = rec_num_checkpoints = 0;
+	for (uint32_t i = 0; i < view.num_events; i++)
+	{
+		rec_events = grow(rec_events, rec_num_events, &rec_events_storage, sizeof(input_event));
+		rec_events[rec_num_events++] = read_event(i);
+	}
+	for (uint32_t i = 0; i < view.num_checkpoints; i++)
+	{
+		rec_checkpoints = grow(rec_checkpoints, rec_num_checkpoints, &rec_checkpoints_storage, sizeof(uint32_t));
+		rec_checkpoints[rec_num_checkpoints++] = read_checkpoint(i);
+	}
+	rec_frames = view.frames;
+	input_add_tap(record_tap, NULL);
+	recording_active = 1;
+}
+
 static void replay_close(input_source *src)
 {
 	playing = 0;
 	input_remove_tap(verify_tap, NULL);
+	//a recording from before checkpoints can't go on, as its checkpoints would be off
+	if (!stopping && takeover && view.num_checkpoints == view.frames / CHECKPOINT_FRAMES) {
+		take_over();
+		return;
+	}
 	rom_coverage_stop();
 	if (!stopping) {
 		//played to the end, so it read what its recording did
@@ -561,6 +594,53 @@ EXPORT uint32_t quote_pass_count(void)
 	return quote_passes();
 }
 
+uint8_t input_replay_seed(const uint8_t *quote, size_t size)
+{
+	const uint8_t *replay;
+	size_t replay_size;
+	uint8_t *kept = quote_seed_kept(quote, size, &replay, &replay_size);
+	if (!kept) {
+		return 0;
+	}
+	//quote may be exchange, which a recording is copied out of before anything else
+	uint8_t *copy = malloc(replay_size);
+	memcpy(copy, replay, replay_size);
+	recording_view seeded;
+	if (!parse_recording(copy, replay_size, &seeded)) {
+		free(copy);
+		free(kept);
+		return 0;
+	}
+	record_stop();
+	playback_stop();
+	free(recording);
+	recording = copy;
+	recording_size = replay_size;
+	view = seeded;
+	quote_add_pass(recording, recording_size, view.state, view.state_size, kept);
+	free(kept);
+	return 1;
+}
+
+//input_replay_seed with the quote of size bytes in playback_buffer
+EXPORT uint8_t quote_seed_data(size_t size)
+{
+	return size <= exchange_size && input_replay_seed(exchange, size);
+}
+
+//what the passes so far read, record_coverage_size() bytes, NULL without passes
+EXPORT const uint8_t *quote_union_data(void)
+{
+	return quote_union();
+}
+
+//while on, a playback that reaches its end goes on as a recording from the same start,
+//so a pass can pick up where a recording stopped
+EXPORT void playback_takeover(uint8_t on)
+{
+	takeover = on;
+}
+
 //the ROM bytes the last recording or playback read, one bit per byte of the ROM file,
 //kind is COVERAGE_READ (any read) or COVERAGE_FETCH (68K instruction words)
 EXPORT const uint8_t *record_coverage(uint8_t kind)
@@ -664,12 +744,15 @@ uint8_t input_replay_save(const char *path)
 //gzip("BLREC1\n" + JSON header + "\n" + recording), the website's format
 #define WEB_MAGIC "BLREC1\n"
 
-uint8_t input_replay_load(const char *path)
+//Reads a file input_replay_save or quote_save wrote, gzipped or not, and maybe after a
+//"BLREC1" line and a JSON header line. Returns the buffer to free, with the recording or
+//quote at *start, or NULL if it can't be read.
+static uint8_t *read_saved(const char *path, uint8_t **start, size_t *start_size)
 {
 	//gzread reads files that aren't compressed as they are
 	gzFile f = gzopen(path, "rb");
 	if (!f) {
-		return 0;
+		return NULL;
 	}
 	size_t size = 0, storage = 64 * 1024;
 	uint8_t *data = malloc(storage);
@@ -683,18 +766,43 @@ uint8_t input_replay_load(const char *path)
 		}
 	}
 	gzclose(f);
-	uint8_t *start = data;
+	*start = data;
 	size_t magic_size = strlen(WEB_MAGIC);
 	if (read == 0 && size > magic_size && !memcmp(data, WEB_MAGIC, magic_size)) {
 		uint8_t *header_end = memchr(data + magic_size, '\n', size - magic_size);
-		start = header_end ? header_end + 1 : NULL;
+		*start = header_end ? header_end + 1 : NULL;
 	}
-	if (read < 0 || !start) {
+	if (read < 0 || !*start) {
 		free(data);
+		return NULL;
+	}
+	*start_size = size - (*start - data);
+	return data;
+}
+
+uint8_t input_replay_load(const char *path)
+{
+	uint8_t *start;
+	size_t size;
+	uint8_t *data = read_saved(path, &start, &size);
+	if (!data) {
 		return 0;
 	}
-	size -= start - data;
 	memcpy(playback_buffer(size), start, size);
 	free(data);
 	return playback_start(size);
+}
+
+uint8_t input_replay_seed_file(const char *path)
+{
+	uint8_t *start;
+	size_t size;
+	uint8_t *data = read_saved(path, &start, &size);
+	if (!data) {
+		warning("Couldn't read %s\n", path);
+		return 0;
+	}
+	uint8_t seeded = input_replay_seed(start, size);
+	free(data);
+	return seeded;
 }
