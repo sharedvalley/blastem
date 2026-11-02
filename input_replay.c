@@ -221,9 +221,13 @@ static uint32_t read_checkpoint(uint32_t index)
 	return crc;
 }
 
+//Input for a frame is applied as the frame before it ends, and a recording takes it then.
+//So the input a recording took last, as it stopped, was for a frame it never ran: playback
+//ends as the recording's last frame does, rather than running one more, which could read
+//what the recording didn't, e.g. what a quote of it doesn't keep.
 static uint8_t replay_poll(input_source *src, pad_state *out)
 {
-	if (play_frame >= view.frames) {
+	if (play_frame + 1 >= view.frames) {
 		return 0;
 	}
 	for (; play_next_event < view.num_events; play_next_event++)
@@ -261,8 +265,9 @@ static void verify_tap(void *data, system_header *system, const pad_state *appli
 	}
 }
 
-//the playback that just reached its end becomes a recording from the same start that
-//goes on from here, so it makes one pass with what the playback read
+//The playback that just reached its end becomes a recording from the same start that goes
+//on from here, so it makes one pass with what the playback read. It ended as its last
+//frame did, where the recording takes the input for the next one, which is live from now.
 static void take_over(void)
 {
 	free(rec_state);
@@ -271,18 +276,21 @@ static void take_over(void)
 	rec_state_size = view.state_size;
 	rec_initial = view.initial;
 	rec_last = play_state;
+	rec_frames = view.frames - 1;
 	rec_num_events = rec_num_checkpoints = 0;
 	for (uint32_t i = 0; i < view.num_events; i++)
 	{
-		rec_events = grow(rec_events, rec_num_events, &rec_events_storage, sizeof(input_event));
-		rec_events[rec_num_events++] = read_event(i);
+		input_event event = read_event(i);
+		if (event.frame < rec_frames) {
+			rec_events = grow(rec_events, rec_num_events, &rec_events_storage, sizeof(input_event));
+			rec_events[rec_num_events++] = event;
+		}
 	}
-	for (uint32_t i = 0; i < view.num_checkpoints; i++)
+	for (uint32_t i = 0; i < rec_frames / CHECKPOINT_FRAMES; i++)
 	{
 		rec_checkpoints = grow(rec_checkpoints, rec_num_checkpoints, &rec_checkpoints_storage, sizeof(uint32_t));
 		rec_checkpoints[rec_num_checkpoints++] = read_checkpoint(i);
 	}
-	rec_frames = view.frames;
 	input_add_tap(record_tap, NULL);
 	recording_active = 1;
 }
@@ -292,7 +300,7 @@ static void replay_close(input_source *src)
 	playing = 0;
 	input_remove_tap(verify_tap, NULL);
 	//a recording from before checkpoints can't go on, as its checkpoints would be off
-	if (!stopping && takeover && view.num_checkpoints == view.frames / CHECKPOINT_FRAMES) {
+	if (!stopping && takeover && view.frames && view.num_checkpoints >= (view.frames - 1) / CHECKPOINT_FRAMES) {
 		take_over();
 		return;
 	}
