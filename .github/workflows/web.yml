@@ -97,4 +97,10 @@ jobs:
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" blastem.js blastem.wasm --title "BlastEm web $VERSION" --generate-notes
+        # A tag made from GitHub's "Draft a new release" page already has its release
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" blastem.js blastem.wasm --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" blastem.js blastem.wasm --title "BlastEm web $VERSION" --generate-notes
+          fi
