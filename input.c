@@ -12,6 +12,7 @@ static system_header *applied_system;
 static input_source *source;
 static input_tap taps[INPUT_MAX_TAPS];
 static uint32_t num_taps;
+static input_frame_hook frame_hook;
 
 static uint16_t *state_bits(pad_state *state, uint8_t pad)
 {
@@ -71,6 +72,11 @@ void input_remove_tap(input_tap_fun fun, void *data)
 	}
 }
 
+void input_set_frame_hook(input_frame_hook hook)
+{
+	frame_hook = hook;
+}
+
 const pad_state *input_applied(void)
 {
 	return &applied;
@@ -128,6 +134,9 @@ void input_frame(system_header *system)
 	}
 	apply_bits(system, GAMEPAD_MAIN_UNIT, applied.main_unit, next.main_unit);
 	applied = next;
+	if (frame_hook) {
+		frame_hook(system);
+	}
 	//a tap may remove itself, so walk a copy
 	input_tap current[INPUT_MAX_TAPS];
 	uint32_t count = num_taps;

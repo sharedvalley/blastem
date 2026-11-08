@@ -33,6 +33,7 @@
 #include "event_log.h"
 #include "input_replay.h"
 #include "quote.h"
+#include "remix.h"
 #include "rom_coverage.h"
 #ifndef DISABLE_NUKLEAR
 #include "nuklear_ui/blastem_nuklear.h"
@@ -366,6 +367,10 @@ static void start_quote(system_header *system)
 		return;
 	}
 	size_t size;
+	const uint8_t *remix = quote_remix(&size);
+	if (remix && !remix_parse((const char *)remix, size, system_get_emu_api(system))) {
+		fatal_error("The remix in this playable quote can't be played: %s\n", remix_why());
+	}
 	const uint8_t *replay = quote_replay(&size);
 	memcpy(playback_buffer(size), replay, size);
 	if (!playback_start(size)) {
@@ -497,6 +502,22 @@ static void play_next_recording(void)
 	}
 }
 
+static void load_remix_file(const char *path, system_header *system)
+{
+	FILE *f = fopen(path, "rb");
+	if (!f) {
+		fatal_error("Failed to open the remix %s\n", path);
+	}
+	//one byte over the limit, so a file that's too long is reported as that
+	char *json = malloc(REMIX_MAX_SIZE + 1);
+	size_t size = fread(json, 1, REMIX_MAX_SIZE + 1, f);
+	fclose(f);
+	if (!remix_parse(json, size, system_get_emu_api(system))) {
+		fatal_error("Failed to load the remix %s: %s\n", path, remix_why());
+	}
+	free(json);
+}
+
 static void save_recording(void)
 {
 	record_stop();
@@ -527,6 +548,7 @@ int main(int argc, char ** argv)
 	char * romfname = NULL;
 	char * statefile = NULL;
 	char *replay_list = NULL;
+	char *remix_path = NULL;
 	char *reader_addr = NULL, *reader_port = NULL;
 	event_reader reader = {0};
 	debugger_type dtype = DEBUGGER_NATIVE;
@@ -667,6 +689,13 @@ int main(int argc, char ** argv)
 				}
 				record_path = argv[i];
 				break;
+			case 'X':
+				i++;
+				if (i >= argc) {
+					fatal_error("-X must be followed by a remix filename\n");
+				}
+				remix_path = argv[i];
+				break;
 			case 'y':
 				opts |= YM_OPT_WAVE_LOG;
 				break;
@@ -709,6 +738,7 @@ int main(int argc, char ** argv)
 					"	            this ROM, so -R recordings from its start improve on it\n"
 					"	-W FILE     Record inputs once the game starts, or once the -R recordings\n"
 					"	            played, and write them to FILE on exit\n"
+					"	-X FILE     Apply the remix in FILE, as JSON, to each recording or playback\n"
 					"	-o FILE     Load FILE as a lock-on cartridge\n"
 					"	-d          Enter debugger on startup\n"
 					"	-n          Disable Z80\n"
@@ -863,6 +893,9 @@ int main(int argc, char ** argv)
 
 	current_system->debugger_type = dtype;
 	current_system->enter_debugger = start_in_debugger && menu == debug_target;
+	if (remix_path) {
+		load_remix_file(remix_path, current_system);
+	}
 	if (seed_path && !input_replay_seed_file(seed_path)) {
 		//the warnings before this say why
 		fatal_error("Couldn't start the passes from the playable quote in %s\n", seed_path);

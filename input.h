@@ -33,6 +33,11 @@ void input_live_set(uint8_t pad, uint8_t button, uint8_t down);
 void input_set_source(input_source *src);
 void input_add_tap(input_tap_fun fun, void *data);
 void input_remove_tap(input_tap_fun fun, void *data);
+typedef void (*input_frame_hook)(system_header *system);
+//hook runs each frame before the taps, always, so what it changes in the system is there
+//for a tap to see at the same point of a recording and of its playback; taps can't promise
+//that, as removing one reorders them
+void input_set_frame_hook(input_frame_hook hook);
 //the state the system currently has
 const pad_state *input_applied(void);
 //puts the system's buttons in state after its state changed under the input code, e.g.

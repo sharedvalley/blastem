@@ -2702,6 +2702,37 @@ static void stop_vgm_log(system_header *system)
 	gen->header.vgm_logging = 0;
 }
 
+#define WORK_RAM_BASE 0xFF0000
+
+//work RAM is words in the host's order, so go through them to get the 68K's bytes
+static uint8_t work_ram_read8(void *data, uint32_t offset)
+{
+	genesis_context *gen = data;
+	uint16_t word = gen->work_ram[offset >> 1];
+	return offset & 1 ? word : word >> 8;
+}
+
+static void work_ram_write8(void *data, uint32_t offset, uint8_t value)
+{
+	genesis_context *gen = data;
+	uint16_t *word = gen->work_ram + (offset >> 1);
+	*word = offset & 1 ? (*word & 0xFF00) | value : (*word & 0x00FF) | value << 8;
+	m68k_invalidate_code_range(gen->m68k, WORK_RAM_BASE + offset, WORK_RAM_BASE + offset + 1);
+}
+
+static const emu_api *get_emu_api(system_header *system)
+{
+	static emu_region regions[] = {
+		{.name = "wram", .base = WORK_RAM_BASE, .size = RAM_WORDS * 2, .big_endian = 1, .read8 = work_ram_read8, .write8 = work_ram_write8}
+	};
+	static const emu_api api = {.system = "genesis", .regions = regions, .num_regions = sizeof(regions) / sizeof(*regions)};
+	if (system->type != SYSTEM_GENESIS) {
+		return NULL;
+	}
+	regions[0].data = system;
+	return &api;
+}
+
 static void toggle_debug_view(system_header *system, uint8_t debug_view)
 {
 #ifndef IS_LIB
@@ -2929,6 +2960,7 @@ static genesis_context *shared_init(uint32_t system_opts, rom_info *rom, uint8_t
 	gen->header.stop_vgm_log = stop_vgm_log;
 	gen->header.toggle_debug_view = toggle_debug_view;
 	gen->header.get_vdp = get_vdp;
+	gen->header.get_emu_api = get_emu_api;
 	gen->header.type = SYSTEM_GENESIS;
 	gen->header.info = *rom;
 	set_region(gen, rom, force_region);
