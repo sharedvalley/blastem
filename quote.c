@@ -36,6 +36,8 @@ static uint8_t *loaded_valid;
 static char loaded_sha1[41];
 static uint8_t *loaded_replay;
 static size_t loaded_replay_size;
+static uint8_t *loaded_remix;
+static size_t loaded_remix_size;
 static quote_miss_handler miss_handler;
 static uint8_t missed;
 
@@ -302,8 +304,8 @@ static uint8_t meta_value(const uint8_t *meta, uint32_t size, const char *key, c
 }
 
 typedef struct {
-	const uint8_t *ranges, *replay;
-	uint32_t      ranges_size, replay_size, rom_size;
+	const uint8_t *ranges, *replay, *remix;
+	uint32_t      ranges_size, replay_size, remix_size, rom_size;
 	char          sha1[41];
 } quote_file;
 
@@ -319,7 +321,8 @@ static uint8_t parse_quote(const uint8_t *data, size_t size, quote_file *out)
 	}
 	const uint8_t *meta = NULL;
 	uint32_t meta_size = 0;
-	out->ranges = out->replay = NULL;
+	out->ranges = out->replay = out->remix = NULL;
+	out->remix_size = 0;
 	for (const uint8_t *cur = data + 8, *end = data + size; cur < end;)
 	{
 		if (end - cur < 8 || read32(cur + 4) > end - cur - 8) {
@@ -336,6 +339,9 @@ static uint8_t parse_quote(const uint8_t *data, size_t size, quote_file *out)
 		} else if (!memcmp(cur, "RPLY", 4)) {
 			out->replay = cur + 8;
 			out->replay_size = chunk_size;
+		} else if (!memcmp(cur, "RMIX", 4)) {
+			out->remix = cur + 8;
+			out->remix_size = chunk_size;
 		}
 		cur += 8 + chunk_size;
 	}
@@ -403,6 +409,13 @@ uint32_t quote_unpack(void **vbuffer, uint32_t size)
 	loaded_replay = malloc(q.replay_size);
 	memcpy(loaded_replay, q.replay, q.replay_size);
 	loaded_replay_size = q.replay_size;
+	free(loaded_remix);
+	loaded_remix = NULL;
+	if (q.remix) {
+		loaded_remix = malloc(q.remix_size ? q.remix_size : 1);
+		memcpy(loaded_remix, q.remix, q.remix_size);
+	}
+	loaded_remix_size = q.remix_size;
 	aligned_free(data);
 	*vbuffer = rom;
 	return q.rom_size;
@@ -417,6 +430,12 @@ const uint8_t *quote_replay(size_t *size)
 {
 	*size = loaded_replay_size;
 	return loaded_replay;
+}
+
+const uint8_t *quote_remix(size_t *size)
+{
+	*size = loaded_remix_size;
+	return loaded_remix;
 }
 
 const char *quote_rom_sha1(const uint8_t *rom)

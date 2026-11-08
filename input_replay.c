@@ -7,7 +7,9 @@
 #include "input_replay.h"
 #include "input.h"
 #include "io.h"
+#include "blastem.h"
 #include "quote.h"
+#include "remix.h"
 #include "rom_coverage.h"
 #include "serialize.h"
 #include "zlib/zlib.h"
@@ -127,6 +129,37 @@ static void notify_playback_end(void)
 //the desync itself is already reported as a warning
 static void notify_desync(uint32_t frame) {}
 #endif
+
+#ifdef __EMSCRIPTEN__
+EM_JS(void, notify_remix_outcome, (uint32_t outcome, uint32_t frame), {
+	if (Module.onBlastemRemixOutcome) {
+		Module.onBlastemRemixOutcome(outcome, frame);
+	}
+});
+#endif
+
+static void report_remix_outcome(uint8_t outcome, uint32_t frame)
+{
+#ifdef __EMSCRIPTEN__
+	notify_remix_outcome(outcome, frame);
+#else
+	printf("Remix outcome: %s at frame %u\n", outcome == REMIX_WIN ? "win" : "lose", frame);
+	fflush(stdout);
+#endif
+}
+
+static void remix_hook(system_header *system)
+{
+	remix_frame();
+}
+
+//a run is starting, with the system at its start state
+static void start_remix(system_header *system)
+{
+	input_set_frame_hook(remix_hook);
+	remix_on_outcome(report_remix_outcome);
+	remix_start(system_get_emu_api(system));
+}
 
 //Video and sound chip internals, e.g. line fetch buffers and operator phases, don't
 //survive a save state round trip exactly, and the game can't observe them, so a
@@ -304,6 +337,7 @@ static void replay_close(input_source *src)
 		take_over();
 		return;
 	}
+	remix_stop();
 	rom_coverage_stop();
 	if (!stopping) {
 		//played to the end, so it read what its recording did
@@ -457,8 +491,9 @@ uint8_t input_replay_pending(void)
 }
 
 //state is the system's current state, which the recording takes over
-static void start_recording(uint8_t *state, size_t state_size)
+static void start_recording(system_header *system, uint8_t *state, size_t state_size)
 {
+	start_remix(system);
 	free(rec_state);
 	rec_state = state;
 	rec_state_size = state_size;
@@ -484,6 +519,7 @@ static void begin_playback(system_header *system)
 	input_set_source(&replay_source);
 	rom_coverage_start();
 	playing = 1;
+	start_remix(system);
 }
 
 void input_replay_play_started(system_header *system)
@@ -507,7 +543,7 @@ void input_replay_run_boundary(system_header *system)
 	if (pending == PENDING_RECORD) {
 		size_t size;
 		uint8_t *state = system->serialize(system, &size);
-		start_recording(state, size);
+		start_recording(system, state, size);
 	} else if (pending == PENDING_PASS) {
 		system->deserialize(system, view.state, view.state_size);
 		input_reset_applied(system, &view.initial);
@@ -515,7 +551,7 @@ void input_replay_run_boundary(system_header *system)
 		//the state itself rather than serializing it again, which isn't exactly the same
 		uint8_t *state = malloc(view.state_size);
 		memcpy(state, view.state, view.state_size);
-		start_recording(state, view.state_size);
+		start_recording(system, state, view.state_size);
 	} else {
 		if (playing) {
 			//restarting it, so it didn't finish
@@ -555,6 +591,7 @@ EXPORT void record_stop(void)
 	}
 	if (recording_active) {
 		recording_active = 0;
+		remix_stop();
 		input_remove_tap(record_tap, NULL);
 		rom_coverage_stop();
 		finish_recording();
@@ -734,6 +771,47 @@ EXPORT uint32_t record_status(void)
 		return 2U << 30 | (play_frame & 0x3FFFFFFF);
 	}
 	return recording ? view.frames & 0x3FFFFFFF : 0;
+}
+
+static char *remix_exchange;
+
+//returns a buffer for JS to copy a remix into before calling remix_load
+EXPORT char *remix_buffer(size_t size)
+{
+	remix_exchange = realloc(remix_exchange, size ? size : 1);
+	return remix_exchange;
+}
+
+//makes the size bytes JS copied into remix_buffer the remix of the runs started from now
+//on, returns 0 if they can't be, which remix_error explains
+EXPORT uint8_t remix_load(size_t size)
+{
+	return remix_parse(remix_exchange, size, system_get_emu_api(current_system));
+}
+
+EXPORT void remix_clear(void)
+{
+	remix_discard();
+}
+
+EXPORT const char *remix_error(void)
+{
+	return remix_why();
+}
+
+//the outcome (REMIX_NONE, REMIX_WIN or REMIX_LOSE) in the top 2 bits, then the frame it
+//was reached on, or until then the frames run so far
+EXPORT uint32_t remix_status(void)
+{
+	return (uint32_t)remix_outcome() << 30 | (remix_outcome_frame() & 0x3FFFFFFF);
+}
+
+//the size byte value at address of the named region, 0 if there's no such place to read
+EXPORT uint32_t remix_read(const char *region, uint32_t address, uint8_t size)
+{
+	uint32_t value = 0;
+	remix_peek(system_get_emu_api(current_system), region, address, size, &value);
+	return value;
 }
 
 uint8_t input_replay_save(const char *path)

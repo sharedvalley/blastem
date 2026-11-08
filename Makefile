@@ -322,7 +322,7 @@ else
 COREOBJS+= sms.o i8255.o korean_sms_multi.o $(Z80OBJS)
 endif
 
-MAINOBJS:=$(COREOBJS) blastem.o $(RENDEROBJS) zip.o  menu.o debug.o gdb_remote.o bindings.o oscilloscope.o input.o input_replay.o
+MAINOBJS:=$(COREOBJS) blastem.o $(RENDEROBJS) zip.o  menu.o debug.o gdb_remote.o bindings.o oscilloscope.o input.o input_replay.o remix.o
 
 #vfs_file.o only in this list: it is the libretro build's file layer, and the
 #standalone one keeps using stdio directly (see media_file.h).

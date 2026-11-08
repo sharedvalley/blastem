@@ -12,6 +12,7 @@
 //META "key=value" lines: rom_sha1 and rom_size of the original ROM, name, passes, kept
 //ROMS ranges of the ROM file: offset | length | bytes, everything else reads as 0
 //RPLY the official recording, as record_data() returns it
+//RMIX the remix that plays over it, as JSON (remix.h), only in a quote that has one
 
 //a recording or playback that finished, as a pass of the quote being built. Passes of
 //one quote start from the same state, so one from another state starts a new quote.
@@ -34,6 +35,8 @@ uint32_t quote_unpack(void **buffer, uint32_t size);
 uint8_t quote_loaded(const void *rom);
 //the official recording of the loaded quote
 const uint8_t *quote_replay(size_t *size);
+//the remix of the loaded quote, NULL without one
+const uint8_t *quote_remix(size_t *size);
 //the SHA-1 of the original ROM, in hex, when rom is the loaded quote's
 const char *quote_rom_sha1(const uint8_t *rom);
 //when data is a quote of the ROM loaded, the bytes it keeps, one bit per byte of the ROM

@@ -6,6 +6,7 @@
 #include "media_file.h"
 #include "flac.h"
 #include "zip.h"
+#include "emu_api.h"
 
 typedef struct system_header system_header;
 typedef struct system_media system_media;
@@ -133,6 +134,7 @@ typedef uint8_t *(*system_ptrszt_fun_rptr8)(system_header *, size_t *);
 typedef void (*system_ptr8_sizet_fun)(system_header *, uint8_t *, size_t);
 typedef void (*system_media_fun)(system_header *, system_media *);
 typedef vdp_context *(*system_fun_rvdp)(system_header *);
+typedef const emu_api *(*system_fun_remu_api)(system_header *);
 
 #include "arena.h"
 #include "romdb.h"
@@ -168,6 +170,7 @@ struct system_header {
 	system_u8_fun           cassette_action;
 	system_media_fun        lockon_change;
 	system_fun_rvdp         get_vdp;
+	system_fun_remu_api     get_emu_api;
 	rom_info          info;
 	arena             *arena;
 	char              *next_rom;
@@ -198,6 +201,8 @@ system_type detect_system_type(system_media *media);
 system_header *alloc_config_system(system_type stype, system_media *media, uint32_t opts, uint8_t force_region);
 system_header *alloc_config_player(system_type stype, event_reader *reader);
 void system_request_exit(system_header *system, uint8_t force_release);
+//what the system offers code that isn't tied to it, NULL if it doesn't yet
+const emu_api *system_get_emu_api(system_header *system);
 uint32_t load_media(char * filename, system_media *dst, system_type *stype);
 void* load_media_subfile(const system_media *media, char *path, uint32_t *sizeout);
 

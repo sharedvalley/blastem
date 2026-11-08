@@ -527,6 +527,11 @@ void system_request_exit(system_header *system, uint8_t force_release)
 	system->request_exit(system);
 }
 
+const emu_api *system_get_emu_api(system_header *system)
+{
+	return system->get_emu_api ? system->get_emu_api(system) : NULL;
+}
+
 void* load_media_subfile(const system_media *media, char *path, uint32_t *sizeout)
 {
 #ifdef IS_LIB
